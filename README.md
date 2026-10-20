@@ -1,0 +1,129 @@
+# Remote Dorado Commander
+
+Un MCP remoto **autoalojado**, creado de forma independiente, para usar tus propios equipos desde clientes MCP remotos (incluido ChatGPT, cuando tu cuenta tenga habilitadas las acciones necesarias). **Sin cuotas de llamadas ni suscripción del proveedor original**: tú alojas el relay y el agente. Siguen existiendo los límites de tu infraestructura y de cada cliente/plataforma de IA.
+
+> **Estado: MVP v0.1.0**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
+
+## Arquitectura
+
+```text
+ChatGPT / otro cliente MCP -- HTTPS + OAuth/PKCE --> TU SERVIDOR /mcp
+                                                   |  WebSocket autenticado
+                                                   v
+                                agente (conexión SALIENTE desde tu PC)
+                                                   |
+                                                OS / shell / archivos
+```
+
+- Transporte **MCP Streamable HTTP**, JSON-RPC stateless (`POST /mcp`), sin sesiones ni SSE. Respuestas `application/json` y notificaciones `202`. Endpoint `GET /mcp` devuelve `405` cuando el cliente ya está autorizado.
+- **OAuth 2.0**: discovery, registro dinámico de clientes, autorización con contraseña, PKCE S256, tokens bearer y refresh rotatorio. Cada conexión ChatGPT pide aprobación mediante contraseña del administrador.
+- Agente **saliente** por `wss://`, múltiples equipos por nombre, reconexión automática; no hay que abrir puertos de entrada en el PC controlado.
+- Herramientas disponibles: `list_devices`, `ping_device`, `list_directory`, `read_file`, `write_file`, `edit_file`, `search_files`, `execute_command`.
+- Sin llamadas a servicios del proveedor ni contador/cuota incorporados. Concurrencia simultánea máxima por defecto: 16; salida máxima por stream de comando: 250 KB; timeout de comando: 120 s. Son límites de seguridad/recursos, no cobros por número de llamadas.
+
+## Preparar el servidor (Linux + Docker)
+
+**Requisitos**: VPS/servidor al que ChatGPT pueda llegar por HTTPS, Docker + Docker Compose, un dominio y un proxy TLS (Caddy, nginx, Cloudflare Tunnel o Secure MCP Tunnel si está disponible en tu entorno).
+
+```bash
+git clone git@github.com:Doradux/remoteDoradoCommander.git
+cd remoteDoradoCommander
+cp .env.example .env
+python3 -c 'import secrets; print("DORADO_ADMIN_PASSWORD="+secrets.token_urlsafe(32)); print("DORADO_AGENT_TOKEN="+secrets.token_urlsafe(48))'
+```
+
+Copia **los valores aleatorios** impresos a `.env` en lugar de sus `REPLACE_...`, y configura `DORADO_PUBLIC_URL=https://mcp.TU-DOMINIO.com` (sin `/mcp`). No publiques el `.env` ni envíes secretos por chat.
+
+```bash
+mkdir -p data
+# En Linux, la imagen Docker usa uid 10001 para la base de datos:
+sudo chown 10001:10001 data
+docker compose up -d --build
+curl http://127.0.0.1:8765/health
+```
+
+El contenedor solo expone `127.0.0.1:8765` del host. Configura HTTPS con un proxy inverso. **Ejemplo Caddyfile** en el mismo host:
+
+```caddyfile
+mcp.TU-DOMINIO.com {
+    reverse_proxy 127.0.0.1:8765
+}
+```
+
+El proxy debe admitir WebSockets, conservar la cabecera `Authorization`, aplicar TLS y limitar el tráfico hacia `/oauth/*` frente a abusos. En producción, añade firewall, copias de seguridad cifradas de `data/`, y monitorización.
+
+Verifica desde internet (en un dispositivo separado):
+
+```bash
+curl https://mcp.TU-DOMINIO.com/health
+curl https://mcp.TU-DOMINIO.com/.well-known/oauth-authorization-server
+curl -i https://mcp.TU-DOMINIO.com/mcp
+# Esta última debe devolver HTTP 401 con WWW-Authenticate.
+```
+
+## Instalar el agente en un equipo propio
+
+Python **3.11+**; funciona con Linux, macOS y Windows. Descarga el repositorio privado e instala el proyecto:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+export DORADO_PUBLIC_URL=https://mcp.TU-DOMINIO.com
+export DORADO_AGENT_TOKEN='VALOR_ALEATORIO_DEL_SERVIDOR'
+export DORADO_ALLOWED_ROOTS="$HOME"
+remote-dorado-agent --name marcos
+```
+
+En **PowerShell** (instalación previa con `py -m pip install -e .`):
+
+```powershell
+$env:DORADO_PUBLIC_URL="https://mcp.TU-DOMINIO.com"
+$env:DORADO_AGENT_TOKEN="VALOR_ALEATORIO_DEL_SERVIDOR"
+$env:DORADO_ALLOWED_ROOTS=$HOME
+remote-dorado-agent --name marcos
+```
+
+Para otro equipo, usa otro nombre (`marcos-hpr`, `servidor`, etc.). El agente debe permanecer ejecutándose (systemd, servicio de Windows, tmux o supervisor de procesos) para que ChatGPT llegue al equipo. Sin el agente, no hay acceso.
+
+## Conectar a ChatGPT
+
+1. Comprueba que tu cuenta/espacio de trabajo tenga habilitada la creación de aplicaciones MCP personalizadas y que permita las **acciones de escritura** que necesitas. Estas capacidades dependen del plan y del despliegue de funciones de ChatGPT.
+2. En **Configuración → Aplicaciones**, habilita el modo de desarrollador si se ofrece y entra en **Crear**.
+3. URL del servidor MCP: `https://mcp.TU-DOMINIO.com/mcp`. Selecciona OAuth si se solicita (el servidor anuncia sus metadatos).
+4. En la pantalla de autorización de **tu dominio** introduce el valor `DORADO_ADMIN_PASSWORD` y aprueba el acceso.
+5. Escanea las herramientas, crea/activa la aplicación y prueba `list_devices` y `ping_device` en un chat compatible.
+
+**Importante**: la integración no se activa por subir el proyecto a GitHub: debes ejecutar el servidor en una máquina accesible por HTTPS y el agente en los PC deseados. En ChatGPT algunas acciones de terminal/escritura pueden estar restringidas aunque el servidor anuncie las herramientas; esas restricciones son de ChatGPT y este proyecto no las elimina.
+
+## Seguridad
+
+⚠️ **Permisos elevados**: `execute_command` es acceso real al shell como el usuario que ejecuta el agente. Es posible borrar datos, leer claves, modificar repositorios o ejecutar software. Autoriza solamente tus propios clientes; usa un usuario del sistema con pocos privilegios, idealmente una VM o contenedor para pruebas.
+
+- La contraseña de administración es **distinta** del token de agente y se almacena únicamente en variables de entorno; ambos deben ser aleatorios, largos y secretos.
+- Todas las conexiones exteriores deben llegar por HTTPS/WSS. No publiques el puerto sin TLS; no abras el servicio en una red pública usando HTTP.
+- `DORADO_ALLOWED_ROOTS` limita las rutas aceptadas por las herramientas de archivos, pero **no es un sandbox**: el shell puede alcanzar todo lo que permita tu usuario del sistema.
+- `write_file` no sobreescribe por defecto; `edit_file` exige coincidencia única. Los comandos tienen timeout, salida limitada y una concurrencia acotada.
+- Para revocar **todas** las sesiones OAuth puedes parar el servidor, hacer una copia de seguridad y borrar `data/dorado.sqlite3` (esto elimina los registros de clientes y tokens). Cambiar solamente la contraseña NO invalida tokens previamente emitidos.
+- Detener el agente corta el acceso a ese equipo; cambiar `DORADO_AGENT_TOKEN` en el servidor y los agentes invalida el token anterior.
+- El endpoint de registro OAuth es público para soportar clientes dinámicos; protégete de abuso externo mediante firewall, proxy y rate-limiting. Esta versión no proporciona gestión avanzada de usuarios, ni aislamiento entre propietarios, ni auditoría persistente.
+
+## Desarrollo
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[test]'
+pytest -q
+```
+
+La CI prueba autenticación, rechazo de tokens, autorización OAuth/PKCE, refresh, herramientas MCP, WebSocket de dispositivo y operaciones locales. No sustituye a una prueba E2E con ChatGPT real, TLS y un equipo remoto.
+
+## Licencias y atribución
+
+Este código es una implementación **independiente MIT**. El repositorio `desktop-commander/remote-desktop-commander` **no** publica el servicio hospedado como código abierto; su licencia permite consultar la documentación pero **no** copiar ni redistribuir la implementación propietaria. El proyecto `wonderwhy-er/DesktopCommanderMCP` ofrece por separado un servidor MCP local MIT, que podría integrarse en una evolución futura.
+
+- Proyecto de referencia: https://github.com/desktop-commander/remote-desktop-commander
+- Servidor MCP local MIT: https://github.com/wonderwhy-er/DesktopCommanderMCP
+- Especificación MCP: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports
+- ChatGPT developer mode: https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt
