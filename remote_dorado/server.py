@@ -300,7 +300,7 @@ async def mcp(req: Request):
     if "id" not in body:
         return Response(status_code=202)
     if method == "initialize":
-        return JSONResponse({"jsonrpc": "2.0", "id": id_, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "remote-dorado-commander", "version": "0.2.0"}}})
+        return JSONResponse({"jsonrpc": "2.0", "id": id_, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "remote-dorado-commander", "version": "0.3.1"}}})
     if method == "ping":
         result = {}
     elif method == "tools/list":
