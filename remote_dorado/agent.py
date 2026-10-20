@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fnmatch
+import getpass
 import json
 import os
 from pathlib import Path
 import platform
+import tempfile
 import subprocess
 import sys
 import time
@@ -156,15 +158,96 @@ async def run_agent(url: str, token: str, name: str) -> None:
         delay = min(delay * 2, 30)
 
 
+def agent_config_path() -> Path:
+    """Per-user configuration; no admin/root rights required."""
+    if os.environ.get("DORADO_CONFIG_FILE"):
+        return Path(os.environ["DORADO_CONFIG_FILE"]).expanduser()
+    if os.name == "nt":
+        root = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+    else:
+        root = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    return root / "remote-dorado-commander" / "agent.json"
+
+
+def read_agent_config() -> dict[str, Any]:
+    path = agent_config_path()
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Agent config must be a JSON object")
+    return data
+
+
+def save_agent_config(data: dict[str, Any]) -> Path:
+    path = agent_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        path.parent.chmod(0o700)
+    # Atomic replacement avoids half-written credentials on interruption.
+    fd, filename = tempfile.mkstemp(prefix=".agent-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, indent=2)
+            stream.write("\n")
+        if os.name != "nt":
+            os.chmod(filename, 0o600)
+        os.replace(filename, path)
+    finally:
+        if os.path.exists(filename):
+            os.unlink(filename)
+    return path
+
+
+def interactive_setup() -> None:
+    old = read_agent_config()
+    print("Remote Dorado Commander | configure this PC")
+    print("You need your own HTTPS relay URL and its DORADO_AGENT_TOKEN.")
+    default_url = os.environ.get("DORADO_PUBLIC_URL") or old.get("public_url", "")
+    raw_url = input(f"Relay URL{f' [{default_url}]' if default_url else ''}: ").strip()
+    url = (raw_url or default_url).rstrip("/")
+    if not url:
+        raise ValueError("A relay URL is required")
+    parts = urlsplit(url)
+    if not ((parts.scheme == "https" and parts.netloc) or
+            (parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1"))):
+        raise ValueError("Use https:// for remote access (http://localhost only for local testing)")
+    if parts.path.strip("/") or parts.query or parts.fragment or parts.username or parts.password:
+        raise ValueError("Enter the base URL only (for example https://mcp.example.com)")
+    token = getpass.getpass("Agent token (input hidden; Enter keeps existing): ").strip() or old.get("agent_token", "")
+    if len(token) < 32:
+        raise ValueError("DORADO_AGENT_TOKEN must be at least 32 characters")
+    default_name = old.get("device_name", platform.node())
+    name = input(f"PC name [{default_name}]: ").strip() or default_name
+    if not 1 <= len(name) <= 64 or not all(c.isalnum() or c in "_-" for c in name):
+        raise ValueError("Device name must be 1-64 letters, digits, underscores or hyphens")
+    path = save_agent_config({"public_url": url, "agent_token": token, "device_name": name, "auto_shell": True})
+    print(f"Saved locally: {path} (the token is not printed)")
+    print("Start with: remote-dorado-agent")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Connect this machine to your private Dorado MCP server")
     parser.add_argument("--name", default=os.environ.get("DORADO_DEVICE_NAME", platform.node()))
     parser.add_argument("--auto-shell", action="store_true", help="Start a persistent interactive shell at startup")
+    parser.add_argument("--setup", action="store_true", help="Interactively configure this machine (no repository or Python needed with binary release)")
     args = parser.parse_args()
-    url, token = os.environ.get("DORADO_PUBLIC_URL", ""), os.environ.get("DORADO_AGENT_TOKEN", "")
+    if args.setup:
+        try:
+            interactive_setup()
+        except (ValueError, EOFError, KeyboardInterrupt) as exc:
+            parser.error(f"Setup cancelled/invalid: {exc}")
+        return
+    config = read_agent_config()
+    url = os.environ.get("DORADO_PUBLIC_URL") or config.get("public_url", "")
+    token = os.environ.get("DORADO_AGENT_TOKEN") or config.get("agent_token", "")
+    if not os.environ.get("DORADO_ALLOWED_ROOTS") and config.get("allowed_roots"):
+        os.environ["DORADO_ALLOWED_ROOTS"] = str(config["allowed_roots"])
+    if args.name == platform.node() and not os.environ.get("DORADO_DEVICE_NAME"):
+        args.name = config.get("device_name", args.name)
     if not url or len(token) < 32:
         parser.error("Set DORADO_PUBLIC_URL and a random DORADO_AGENT_TOKEN (32+ characters)")
-    if args.auto_shell or os.environ.get("DORADO_AUTO_SHELL", "0") == "1":
+    if args.auto_shell or os.environ.get("DORADO_AUTO_SHELL", "0") == "1" or config.get("auto_shell", False):
         created = sessions.start(checked_path(str(Path.home()), must_exist=True))
         print(f"Persistent shell ready: {created['session_id']} ({created['pid']})", flush=True)
     asyncio.run(run_agent(url, token, args.name))
