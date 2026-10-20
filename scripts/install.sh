@@ -4,9 +4,7 @@ set -euo pipefail
 
 repo="Doradux/remoteDoradoCommander"
 component="${1:-agent}"
-case "$component" in agent|server) ;; *) echo 'Usage: install.sh [agent|server] [--no-setup]' >&2; exit 2 ;; esac
-no_setup=false
-if [[ "${2:-}" == '--no-setup' ]]; then no_setup=true; fi
+case "$component" in agent|server) ;; *) echo 'Usage: install.sh [agent|server]' >&2; exit 2 ;; esac
 
 if ! command -v gh >/dev/null 2>&1; then
   echo 'Install GitHub CLI (gh) and run gh auth login first: https://cli.github.com/' >&2
@@ -52,9 +50,7 @@ if [[ ":$PATH:" != *":$install_dir:"* ]]; then
   printf 'Add this directory to your PATH: %s\n' "$install_dir"
 fi
 
-if [[ "$component" == agent ]] && [[ "$no_setup" == false ]] && [[ -t 0 ]]; then
-  printf '\nConfigure your PC now (URL and secret token; saved only locally)? [Y/n] '
-  read -r answer
-  if [[ ! "$answer" =~ ^[Nn] ]]; then "$install_dir/$binary" --setup; fi
-fi
 printf 'Run: %s/%s\n' "$install_dir" "$binary"
+if [[ "$component" == agent ]]; then
+  printf 'First run: asks the PC/session name, relay URL and token, then saves them locally.\n'
+fi
