@@ -2,7 +2,7 @@
 
 Un MCP remoto **autoalojado**, creado de forma independiente, para usar tus propios equipos desde clientes MCP remotos (incluido ChatGPT, cuando tu cuenta tenga habilitadas las acciones necesarias). **Sin cuotas de llamadas ni suscripción del proveedor original**: tú alojas el relay y el agente. Siguen existiendo los límites de tu infraestructura y de cada cliente/plataforma de IA.
 
-> **Estado: MVP v0.1.0**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
+> **Estado: MVP v0.2.0**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
 
 ## Arquitectura
 
@@ -17,8 +17,10 @@ ChatGPT / otro cliente MCP -- HTTPS + OAuth/PKCE --> TU SERVIDOR /mcp
 
 - Transporte **MCP Streamable HTTP**, JSON-RPC stateless (`POST /mcp`), sin sesiones ni SSE. Respuestas `application/json` y notificaciones `202`. Endpoint `GET /mcp` devuelve `405` cuando el cliente ya está autorizado.
 - **OAuth 2.0**: discovery, registro dinámico de clientes, autorización con contraseña, PKCE S256, tokens bearer y refresh rotatorio. Cada conexión ChatGPT pide aprobación mediante contraseña del administrador.
-- Agente **saliente** por `wss://`, múltiples equipos por nombre, reconexión automática; no hay que abrir puertos de entrada en el PC controlado.
-- Herramientas disponibles: `list_devices`, `ping_device`, `list_directory`, `read_file`, `write_file`, `edit_file`, `search_files`, `execute_command`.
+- Agente **saliente** por `wss://`, múltiples equipos por nombre, reconexión automática; no hay que abrir puertos de entrada en el PC controlado. El servidor recuerda nombres conectados anteriormente y muestra si están desconectados.
+- Sesiones de shell persistentes **por PC**: varias simultáneas, con `session_id`, PID, estado, directorio, ejecución interactiva y buffer de salida consultable por cursor. La sesión se mantiene entre distintas llamadas MCP y reconexiones WebSocket mientras el proceso del agente siga vivo.
+- Descubrimiento global: `list_all_sessions` consulta en paralelo las terminales de **todos los PCs conectados** y devuelve cada una con su nombre de dispositivo.
+- Herramientas: `list_devices`, `ping_device`, `list_directory`, `read_file`, `write_file`, `edit_file`, `search_files`, `execute_command`, `list_active_sessions`, `list_all_sessions`, `start_process`, `send_input_to_process`, `read_process_output`, `terminate_session`, `forget_session`.
 - Sin llamadas a servicios del proveedor ni contador/cuota incorporados. Concurrencia simultánea máxima por defecto: 16; salida máxima por stream de comando: 250 KB; timeout de comando: 120 s. Son límites de seguridad/recursos, no cobros por número de llamadas.
 
 ## Preparar el servidor (Linux + Docker)
@@ -72,7 +74,7 @@ pip install -e .
 export DORADO_PUBLIC_URL=https://mcp.TU-DOMINIO.com
 export DORADO_AGENT_TOKEN='VALOR_ALEATORIO_DEL_SERVIDOR'
 export DORADO_ALLOWED_ROOTS="$HOME"
-remote-dorado-agent --name marcos
+remote-dorado-agent --name marcos --auto-shell
 ```
 
 En **PowerShell** (instalación previa con `py -m pip install -e .`):
@@ -81,10 +83,28 @@ En **PowerShell** (instalación previa con `py -m pip install -e .`):
 $env:DORADO_PUBLIC_URL="https://mcp.TU-DOMINIO.com"
 $env:DORADO_AGENT_TOKEN="VALOR_ALEATORIO_DEL_SERVIDOR"
 $env:DORADO_ALLOWED_ROOTS=$HOME
-remote-dorado-agent --name marcos
+remote-dorado-agent --name marcos --auto-shell
 ```
 
 Para otro equipo, usa otro nombre (`marcos-hpr`, `servidor`, etc.). El agente debe permanecer ejecutándose (systemd, servicio de Windows, tmux o supervisor de procesos) para que ChatGPT llegue al equipo. Sin el agente, no hay acceso.
+
+## Trabajar con varios PCs y shells activas
+
+Con **un solo servidor MCP**, puedes arrancar el agente en tantos equipos propios como necesites, con nombres únicos como `marcos` (Windows), `marcos-hpr` (Linux), `ubuntu-server`, etc. Si se desconectan, se conservan en `known_devices` como *offline*; los procesos locales mantienen su estado durante breves caídas de red siempre que el agente siga ejecutándose.
+
+- `list_devices`: equipos conectados **ahora** en `devices`, historial con estado en `known_devices`.
+- `list_all_sessions`: consulta todas las shells persistentes **gestionadas por el agente** en todos los equipos online. Resultado con `device` y `session_id` para distinguirlas.
+- `list_active_sessions(device="marcos-hpr")`: enumera las sesiones de un PC concreto, incluso las finalizadas hasta que se descarten.
+- `start_process(device="marcos-hpr", cwd="/home/marcos")`: crea una terminal interactiva; omitir `command` abre la shell predeterminada. Con `command` ejecuta un proceso persistente.
+- `send_input_to_process(device="marcos-hpr", session_id="...", input="pwd")`: escribe en la sesión activa y devuelve también la primera salida disponible (espera 200 ms por defecto, configurable con `wait_ms`).
+- `read_process_output(device="marcos-hpr", session_id="...", cursor=123)`: lee únicamente lo nuevo a partir del cursor devuelto, sin consumir la salida ni perder el estado de la sesión.
+- `terminate_session` y `forget_session` cierran una sesión del agente y liberan su historial.
+
+**Ejemplo de secuencia desde ChatGPT:** «Lista los equipos y todas sus shells activas» → «En `marcos-hpr`, crea una terminal en `/home/marcos/hpr`» → «Ejecuta `git status` en esa sesión» → «Lee lo que ha devuelto» → «Continúa en esa misma terminal». Las shells de distintos dispositivos son independientes, y `cd` y variables propias de cada proceso perduran entre comandos.
+
+**Importante sobre shells externas:** el agente **solo puede enviar texto o capturar salida de sesiones que él mismo haya creado**. No intercepta ni secuestra automáticamente una terminal de VS Code, Windows Terminal, GNOME Terminal, SSH o tmux creada al margen del agente; hacerlo no está soportado por este MVP. `--auto-shell` abre una sesión controlable inmediatamente al arrancar el agente; quita esa opción si prefieres iniciar las sesiones a demanda. La lista `list_all_sessions` no afirma detectar todas las terminales del sistema operativo.
+
+Detalles de implementación: Linux/macOS usan una pseudo-terminal (PTY); Windows usa un proceso persistente `cmd.exe` con tuberías (compatible con comandos básicos, pero no con interfaces de pantalla completa tipo `vim`/`top`). Hasta 24 sesiones activas o retenidas **por agente** (ajustable en código) y 1 MB de salida reciente por sesión; no es una cuota de llamadas ni un servicio de pago. Las sesiones **no sobreviven al reinicio del agente** y las que se ejecuten por fuera no aparecen por sí solas.
 
 ## Conectar a ChatGPT
 
@@ -117,7 +137,7 @@ pip install -e '.[test]'
 pytest -q
 ```
 
-La CI prueba autenticación, rechazo de tokens, autorización OAuth/PKCE, refresh, herramientas MCP, WebSocket de dispositivo y operaciones locales. No sustituye a una prueba E2E con ChatGPT real, TLS y un equipo remoto.
+La CI prueba autenticación, rechazo de tokens, autorización OAuth/PKCE, refresh, herramientas MCP, WebSocket de dispositivo, descubrimiento de dos PCs a la vez, terminales interactivas reales, continuidad de directorio y recuperación de salida. No sustituye a una prueba E2E con ChatGPT real, TLS y un equipo remoto.
 
 ## Licencias y atribución
 
