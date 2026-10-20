@@ -35,8 +35,15 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "edit_file", "description": "Replace an exact unique text block in an existing UTF-8 file.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["device", "path", "old_text", "new_text"]}, "annotations": {"destructiveHint": True}},
     {"name": "search_files", "description": "Search filenames with a glob (e.g. *.py) beneath a directory.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "path": {"type": "string"}, "pattern": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["device", "path"]}},
     {"name": "execute_command", "description": "Execute an arbitrary shell command as the paired computer's OS user; high risk. Max 120 seconds and 250 KB per stream.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "cwd": {"type": "string"}, "command": {"type": "string"}, "timeout_seconds": {"type": "integer"}}, "required": ["device", "cwd", "command"]}, "annotations": {"destructiveHint": True, "openWorldHint": True}},
+    {"name": "list_all_sessions", "description": "Discover every agent-owned persistent terminal across all connected PCs. Returns device and session_id for each; offline machines cannot be inspected.", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "list_active_sessions", "description": "List persistent interactive shells and processes on one PC, including their running/exited state and output cursors.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}}, "required": ["device"]}},
+    {"name": "start_process", "description": "Start a persistent shell (command omitted) or a persistent command on one PC; returns session_id. Survives MCP calls and connection interruptions while agent runs.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "cwd": {"type": "string", "description": "Allowed working directory. Defaults to home."}, "command": {"type": "string", "description": "Optional command. Omit for interactive shell."}}, "required": ["device"]}, "annotations": {"openWorldHint": True}},
+    {"name": "send_input_to_process", "description": "Write input to an existing session on a named PC. For a shell, this executes the command (newline appended by default).", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "session_id": {"type": "string"}, "input": {"type": "string"}, "append_newline": {"type": "boolean", "default": True}, "wait_ms": {"type": "integer", "minimum": 0, "maximum": 5000, "description": "Wait briefly for command output; default 200ms."}}, "required": ["device", "session_id", "input"]}, "annotations": {"openWorldHint": True, "destructiveHint": True}},
+    {"name": "read_process_output", "description": "Read buffered terminal output without consuming it. Pass last cursor to continue reading; up to 100 KB per call.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "session_id": {"type": "string"}, "cursor": {"type": "integer", "minimum": 0}, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 100000}}, "required": ["device", "session_id"]}},
+    {"name": "terminate_session", "description": "Terminate an agent-owned persistent process on a named PC. Optionally force kill.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "session_id": {"type": "string"}, "force": {"type": "boolean"}}, "required": ["device", "session_id"]}, "annotations": {"destructiveHint": True}},
+    {"name": "forget_session", "description": "Remove an already-exited session and its buffered output from the agent.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}, "session_id": {"type": "string"}}, "required": ["device", "session_id"]}, "annotations": {"destructiveHint": True}},
 ]
-OPS = {t["name"] for t in TOOLS} - {"list_devices"}
+OPS = {t["name"] for t in TOOLS} - {"list_devices", "list_all_sessions"}
 
 
 def base_url() -> str:
@@ -81,6 +88,7 @@ def init_db() -> None:
           CREATE TABLE IF NOT EXISTS authorization_requests (id_hash TEXT PRIMARY KEY, client_id TEXT, redirect_uri TEXT, state TEXT, challenge TEXT, resource TEXT, expires INTEGER);
           CREATE TABLE IF NOT EXISTS codes (code_hash TEXT PRIMARY KEY, client_id TEXT, redirect_uri TEXT, challenge TEXT, resource TEXT, expires INTEGER);
           CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, client_id TEXT, kind TEXT, expires INTEGER);
+          CREATE TABLE IF NOT EXISTS known_devices (name TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);
         """)
 
 
@@ -88,6 +96,7 @@ def init_db() -> None:
 class Device:
     socket: WebSocket
     pending: dict[str, asyncio.Future]
+    send_lock: asyncio.Lock
 
 
 class DeviceHub:
@@ -104,7 +113,8 @@ class DeviceHub:
             future = asyncio.get_running_loop().create_future()
             device.pending[request_id] = future
             try:
-                await device.socket.send_json({"id": request_id, "op": op, "args": args})
+                async with device.send_lock:
+                    await device.socket.send_json({"id": request_id, "op": op, "args": args})
                 reply = await asyncio.wait_for(future, timeout=135)
                 if "error" in reply:
                     raise RuntimeError(str(reply["error"]))
@@ -290,7 +300,7 @@ async def mcp(req: Request):
     if "id" not in body:
         return Response(status_code=202)
     if method == "initialize":
-        return JSONResponse({"jsonrpc": "2.0", "id": id_, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "remote-dorado-commander", "version": "0.1.0"}}})
+        return JSONResponse({"jsonrpc": "2.0", "id": id_, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "remote-dorado-commander", "version": "0.2.0"}}})
     if method == "ping":
         result = {}
     elif method == "tools/list":
@@ -299,13 +309,32 @@ async def mcp(req: Request):
         params = body.get("params", {})
         name = params.get("name") if isinstance(params, dict) else None
         args = params.get("arguments", {}) if isinstance(params, dict) else {}
-        if name not in OPS | {"list_devices"}:
+        if name not in OPS | {"list_devices", "list_all_sessions"}:
             return JSONResponse(rpc_error(id_, -32602, "Unknown tool"))
         if not isinstance(args, dict):
             return JSONResponse(rpc_error(id_, -32602, "Invalid tool arguments"))
         try:
             if name == "list_devices":
-                output = {"devices": sorted(hub.devices)}
+                with database() as conn:
+                    known = conn.execute("SELECT name, last_seen FROM known_devices ORDER BY name").fetchall()
+                output = {"devices": sorted(hub.devices), "count": len(hub.devices),
+                          "known_devices": [{"name": d["name"], "online": d["name"] in hub.devices,
+                                             "last_seen": d["last_seen"]} for d in known]}
+            elif name == "list_all_sessions":
+                # Parallel per-device queries so a slow/offline PC does not block others.
+                device_names = sorted(hub.devices)
+                responses = await asyncio.gather(
+                    *(hub.ask(device, "list_active_sessions", {}) for device in device_names),
+                    return_exceptions=True,
+                )
+                all_sessions = []
+                errors = {}
+                for device, response in zip(device_names, responses):
+                    if isinstance(response, BaseException):
+                        errors[device] = str(response)
+                    else:
+                        all_sessions.extend({"device": device, **session} for session in response.get("sessions", []))
+                output = {"online_devices": device_names, "sessions": all_sessions, "count": len(all_sessions), "errors": errors}
             else:
                 device = args.get("device")
                 if not isinstance(device, str) or not device:
@@ -335,7 +364,10 @@ async def agent_socket(ws: WebSocket):
         await ws.close(code=4409)
         return
     await ws.accept()
-    device = Device(socket=ws, pending={})
+    with database() as conn:
+        conn.execute("INSERT INTO known_devices(name, last_seen) VALUES (?, ?) "
+                     "ON CONFLICT(name) DO UPDATE SET last_seen=excluded.last_seen", (name, int(time.time())))
+    device = Device(socket=ws, pending={}, send_lock=asyncio.Lock())
     hub.devices[name] = device
     try:
         while True:
@@ -348,7 +380,10 @@ async def agent_socket(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        hub.devices.pop(name, None)
+        if hub.devices.get(name) is device:
+            hub.devices.pop(name, None)
+        with database() as conn:
+            conn.execute("UPDATE known_devices SET last_seen=? WHERE name=?", (int(time.time()), name))
         for fut in device.pending.values():
             if not fut.done():
                 fut.set_exception(RuntimeError("Agent disconnected"))
