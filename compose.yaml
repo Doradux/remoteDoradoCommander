@@ -1,0 +1,14 @@
+services:
+  mcp:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DORADO_BIND_HOST: 0.0.0.0
+      DORADO_DB: /app/data/dorado.sqlite3
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./data:/app/data
+    security_opt:
+      - no-new-privileges:true
