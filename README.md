@@ -2,7 +2,7 @@
 
 Un MCP remoto **autoalojado**, creado de forma independiente, para usar tus propios equipos desde clientes MCP remotos (incluido ChatGPT, cuando tu cuenta tenga habilitadas las acciones necesarias). **Sin cuotas de llamadas ni suscripción del proveedor original**: tú alojas el relay y el agente. Siguen existiendo los límites de tu infraestructura y de cada cliente/plataforma de IA.
 
-> **Estado: MVP v0.2.0**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
+> **Estado: MVP v0.3.0**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
 
 ## Arquitectura
 
@@ -22,6 +22,43 @@ ChatGPT / otro cliente MCP -- HTTPS + OAuth/PKCE --> TU SERVIDOR /mcp
 - Descubrimiento global: `list_all_sessions` consulta en paralelo las terminales de **todos los PCs conectados** y devuelve cada una con su nombre de dispositivo.
 - Herramientas: `list_devices`, `ping_device`, `list_directory`, `read_file`, `write_file`, `edit_file`, `search_files`, `execute_command`, `list_active_sessions`, `list_all_sessions`, `start_process`, `send_input_to_process`, `read_process_output`, `terminate_session`, `forget_session`.
 - Sin llamadas a servicios del proveedor ni contador/cuota incorporados. Concurrencia simultánea máxima por defecto: 16; salida máxima por stream de comando: 250 KB; timeout de comando: 120 s. Son límites de seguridad/recursos, no cobros por número de llamadas.
+
+## Instalación rápida (sin clonar el repo ni instalar Python)
+
+**Recomendado: descargas binarias privadas desde GitHub Releases.** La Release contiene un agente autónomo para Linux x64, Windows x64, macOS Intel y macOS Apple Silicon; y un servidor autónomo para Linux x64. También se publica un wheel Python y sumas SHA256. La compilación la realiza GitHub Actions automáticamente cuando se sube a `main` una versión nueva en `pyproject.toml`. Puedes consultar los paquetes en [Releases](https://github.com/Doradux/remoteDoradoCommander/releases).
+
+Dado que **el repositorio es privado**, instala [GitHub CLI](https://cli.github.com/) y autoriza la cuenta que tiene acceso con `gh auth login` (una vez por ordenador). **No** expongas credenciales en comandos ni publiques el repositorio para evitar la autenticación.
+
+**Linux / macOS** (Bash; detecta arquitectura automáticamente; verifica SHA256 y pregunta por el URL/token del agente):
+
+```bash
+bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) agent
+```
+
+**Windows (PowerShell):**
+
+```powershell
+& ([scriptblock]::Create((gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.ps1 | Out-String)))
+```
+
+Una vez instalado, **arranca el agente** con `remote-dorado-agent` (o su ruta impresa por el instalador). El asistente `--setup` guarda URL, nombre del PC y token de forma local, sin incluir el token en el historial de la terminal. Abre automáticamente una shell persistente al arrancar. Debe existir primero un **servidor remoto desplegado por ti**, accesible por HTTPS; el instalador no te da un relay alojado gratuitamente.
+
+Instalar el **servidor Linux x64** como binario (aunque en un VPS es preferible el Docker Compose de más abajo):
+
+```bash
+bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) server
+```
+
+Para instalación no interactiva: añade `--no-setup` tras `agent` y usa `DORADO_PUBLIC_URL`, `DORADO_AGENT_TOKEN` y `DORADO_DEVICE_NAME` como variables de entorno. Puedes cambiar el destino en Unix con `DORADO_INSTALL_DIR`. Para actualizar, vuelve a ejecutar la misma orden; se descarga la última Release. Las builds son **por arquitectura** y no incorporan ni publican tus secretos.
+
+**Alternativa pip sin clonar:**
+
+```bash
+gh release download --repo Doradux/remoteDoradoCommander -p '*.whl' -D /tmp/dorado-wheel
+pipx install /tmp/dorado-wheel/*.whl
+```
+
+No hay paquete publicado en npm todavía: un comando `npx` público no funcionaría mientras no se publique en el registro npm. Por ahora la descarga desde Releases evita copiar el repositorio y evita depender de Python instalado para el agente. Las Actions del repositorio privado pueden consumir minutos facturables según tu plan de GitHub.
 
 ## Preparar el servidor (Linux + Docker)
 
@@ -65,7 +102,7 @@ curl -i https://mcp.TU-DOMINIO.com/mcp
 
 ## Instalar el agente en un equipo propio
 
-Python **3.11+**; funciona con Linux, macOS y Windows. Descarga el repositorio privado e instala el proyecto:
+Python **3.11+**; funciona con Linux, macOS y Windows. Método alternativo de desarrollo (requiere descargar el repositorio privado; para evitarlo usa la instalación rápida anterior):
 
 ```bash
 python3 -m venv .venv
@@ -114,7 +151,7 @@ Detalles de implementación: Linux/macOS usan una pseudo-terminal (PTY); Windows
 4. En la pantalla de autorización de **tu dominio** introduce el valor `DORADO_ADMIN_PASSWORD` y aprueba el acceso.
 5. Escanea las herramientas, crea/activa la aplicación y prueba `list_devices` y `ping_device` en un chat compatible.
 
-**Importante**: la integración no se activa por subir el proyecto a GitHub: debes ejecutar el servidor en una máquina accesible por HTTPS y el agente en los PC deseados. En ChatGPT algunas acciones de terminal/escritura pueden estar restringidas aunque el servidor anuncie las herramientas; esas restricciones son de ChatGPT y este proyecto no las elimina.
+**Importante**: la integración no se activa por subir el proyecto a GitHub ni publicar una Release: debes ejecutar el servidor en una máquina accesible por HTTPS y el agente en los PC deseados. En ChatGPT algunas acciones de terminal/escritura pueden estar restringidas aunque el servidor anuncie las herramientas; esas restricciones son de ChatGPT y este proyecto no las elimina.
 
 ## Seguridad
 
