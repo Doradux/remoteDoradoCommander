@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import string
 import sqlite3
 import time
 from typing import Any
@@ -26,6 +27,10 @@ from starlette.websockets import WebSocketDisconnect
 import uvicorn
 
 VERSION = "2025-06-18"
+APP_VERSION = "0.4.0"
+PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+PAIR_LIFETIME_SECONDS = 600
+PAIR_POLL_INTERVAL = 3
 TOOLS: list[dict[str, Any]] = [
     {"name": "list_devices", "description": "List online computers paired with this private server.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "ping_device", "description": "Check the connection and OS of a paired computer.", "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}}, "required": ["device"]}},
@@ -74,13 +79,15 @@ def database():
 
 
 def init_db() -> None:
-    for var in ("DORADO_PUBLIC_URL", "DORADO_AGENT_TOKEN", "DORADO_ADMIN_PASSWORD"):
+    for var in ("DORADO_PUBLIC_URL", "DORADO_ADMIN_PASSWORD"):
         if not os.environ.get(var):
             raise RuntimeError(f"Missing required environment variable: {var}")
     if not base_url().startswith("https://") and not base_url().startswith("http://127.0.0.1") and not base_url().startswith("http://localhost"):
         raise RuntimeError("Use public HTTPS for DORADO_PUBLIC_URL; HTTP is allowed only on loopback for local tests")
-    if len(os.environ["DORADO_AGENT_TOKEN"]) < 32 or len(os.environ["DORADO_ADMIN_PASSWORD"]) < 16:
-        raise RuntimeError("DORADO_AGENT_TOKEN must be 32+ chars; DORADO_ADMIN_PASSWORD 16+ chars")
+    if len(os.environ["DORADO_ADMIN_PASSWORD"]) < 16:
+        raise RuntimeError("DORADO_ADMIN_PASSWORD must be 16+ chars")
+    if os.environ.get("DORADO_AGENT_TOKEN") and len(os.environ["DORADO_AGENT_TOKEN"]) < 32:
+        raise RuntimeError("Optional legacy DORADO_AGENT_TOKEN must be 32+ chars")
     db_path().parent.mkdir(parents=True, exist_ok=True)
     with database() as conn:
         conn.executescript("""
@@ -89,6 +96,15 @@ def init_db() -> None:
           CREATE TABLE IF NOT EXISTS codes (code_hash TEXT PRIMARY KEY, client_id TEXT, redirect_uri TEXT, challenge TEXT, resource TEXT, expires INTEGER);
           CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, client_id TEXT, kind TEXT, expires INTEGER);
           CREATE TABLE IF NOT EXISTS known_devices (name TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS paired_devices (
+            name TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, created INTEGER NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS pairing_requests (
+            device_hash TEXT PRIMARY KEY, user_hash TEXT UNIQUE NOT NULL,
+            device_name TEXT NOT NULL, expires INTEGER NOT NULL,
+            created INTEGER NOT NULL, origin TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0
+          );
         """)
 
 
@@ -146,6 +162,114 @@ def check_redirect(value: str) -> bool:
 
 def require_resource(resource: str | None) -> bool:
     return resource in (None, "", resource_url())
+
+
+# The local executable never needs the relay's shared administrator/agent token.
+# Pairing requires explicit browser confirmation with the self-hosted relay administrator.
+# This authorizes a machine on YOUR relay; it is not an OpenAI/ChatGPT sign-in.
+def normalize_user_code(code: str) -> str:
+    return "".join(c for c in code.upper() if c in PAIR_ALPHABET)
+
+
+def pairing_headers() -> dict[str, str]:
+    return {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
+
+
+@app.post("/pair/device")
+async def pairing_start(request: Request):
+    # No login needed to *request* pairing; approval is administrator protected.
+    try:
+        data = await request.json()
+    except ValueError:
+        return oauth_error("invalid_request")
+    name = data.get("device_name") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+        return oauth_error("invalid_device_name")
+    now = int(time.time())
+    origin = request.client.host if request.client else "unknown"
+    with database() as conn:
+        conn.execute("DELETE FROM pairing_requests WHERE expires < ?", (now,))
+        # Rate-limit unauthenticated issuance (do not trust spoofable forwarded headers).
+        count = conn.execute("SELECT count(*) FROM pairing_requests WHERE origin=? AND created > ?", (origin, now - 600)).fetchone()[0]
+        if count >= 30:
+            return JSONResponse({"error": "slow_down"}, status_code=429, headers=pairing_headers())
+        device_code = secrets.token_urlsafe(48)
+        user = "".join(secrets.choice(PAIR_ALPHABET) for _ in range(12))
+        conn.execute("INSERT INTO pairing_requests (device_hash,user_hash,device_name,expires,created,origin,status,attempts) VALUES (?,?,?,?,?,?,'pending',0)",
+                     (digest(device_code), digest(user), name, now + PAIR_LIFETIME_SECONDS, now, origin))
+    pretty = "-".join(user[i:i + 4] for i in range(0, 12, 4))
+    return JSONResponse({"device_code": device_code, "user_code": pretty,
+                         "verification_uri": base_url() + "/pair",
+                         "verification_uri_complete": base_url() + "/pair?code=" + pretty,
+                         "expires_in": PAIR_LIFETIME_SECONDS, "interval": PAIR_POLL_INTERVAL},
+                        headers=pairing_headers())
+
+
+@app.get("/pair")
+async def pairing_form(request: Request):
+    candidate = html.escape(request.query_params.get("code", "")[:32], quote=True)
+    page = """<!doctype html><html lang='es'><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Vincular PC | Dorado Commander</title>
+<body style='font:16px system-ui;max-width:34rem;margin:4rem auto;padding:1rem'>
+<h1>Vincular un ordenador</h1>
+<p>Aprueba solo códigos que veas en TU equipo. Autorizar concede acceso a archivos y terminal mediante el MCP.</p>
+<form action='/pair/approve' method='post'>
+<label>Código del equipo <input name='user_code' required maxlength='20' autocomplete='off' value='""" + candidate + """'></label>
+<p><label>Contraseña de administración del servidor <input type='password' name='password' required autocomplete='current-password'></label></p>
+<button type='submit'>Autorizar ordenador</button></form></body></html>"""
+    return HTMLResponse(page, headers={**pairing_headers(), "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"})
+
+
+@app.post("/pair/approve")
+async def pairing_approve(request: Request):
+    form = await request.form()
+    user_code = normalize_user_code(str(form.get("user_code", "")))
+    password = str(form.get("password", ""))
+    if len(user_code) != 12:
+        return oauth_error("invalid_user_code", 400)
+    now = int(time.time())
+    with database() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM pairing_requests WHERE user_hash=?", (digest(user_code),)).fetchone()
+        if not row or row["expires"] <= now or row["status"] != "pending" or row["attempts"] >= 5:
+            return oauth_error("expired_or_invalid_code", 403)
+        if not secrets.compare_digest(password, os.environ["DORADO_ADMIN_PASSWORD"]):
+            conn.execute("UPDATE pairing_requests SET attempts=attempts+1 WHERE user_hash=?", (digest(user_code),))
+            return oauth_error("access_denied", 403)
+        conn.execute("UPDATE pairing_requests SET status='approved' WHERE user_hash=?", (digest(user_code),))
+    return HTMLResponse("<h1>Equipo autorizado</h1><p>Puedes cerrar esta pestaña. Vuelve al programa; se conectará automáticamente.</p>", headers=pairing_headers())
+
+
+@app.post("/pair/token")
+async def pairing_token(request: Request):
+    try:
+        data = await request.json()
+    except ValueError:
+        return oauth_error("invalid_request")
+    device_code = data.get("device_code") if isinstance(data, dict) else None
+    if not isinstance(device_code, str) or not 32 <= len(device_code) <= 256:
+        return oauth_error("invalid_device_code")
+    now = int(time.time())
+    with database() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM pairing_requests WHERE device_hash=?", (digest(device_code),)).fetchone()
+        if not row:
+            return oauth_error("invalid_device_code", 400)
+        if row["expires"] <= now:
+            conn.execute("DELETE FROM pairing_requests WHERE device_hash=?", (digest(device_code),))
+            return oauth_error("expired_token", 400)
+        if row["status"] == "pending":
+            return oauth_error("authorization_pending", 400)
+        if row["status"] != "approved":
+            return oauth_error("access_denied", 400)
+        # One-time exchange. Explicit approval on this relay rotates any older device credential.
+        token = secrets.token_urlsafe(48)
+        conn.execute("INSERT INTO paired_devices(name,token_hash,created) VALUES (?,?,?) "
+                     "ON CONFLICT(name) DO UPDATE SET token_hash=excluded.token_hash,created=excluded.created",
+                     (row["device_name"], digest(token), now))
+        conn.execute("DELETE FROM pairing_requests WHERE device_hash=?", (digest(device_code),))
+    return JSONResponse({"device_name": row["device_name"], "agent_token": token}, headers=pairing_headers())
 
 
 @app.get("/health")
@@ -300,7 +424,7 @@ async def mcp(req: Request):
     if "id" not in body:
         return Response(status_code=202)
     if method == "initialize":
-        return JSONResponse({"jsonrpc": "2.0", "id": id_, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "remote-dorado-commander", "version": "0.3.1"}}})
+        return JSONResponse({"jsonrpc": "2.0", "id": id_, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "remote-dorado-commander", "version": APP_VERSION}}})
     if method == "ping":
         result = {}
     elif method == "tools/list":
@@ -357,7 +481,16 @@ async def mcp_get(req: Request):
 async def agent_socket(ws: WebSocket):
     bearer = ws.headers.get("authorization", "")
     name = ws.headers.get("x-device-name", "")
-    if not secrets.compare_digest(bearer, "Bearer " + os.environ["DORADO_AGENT_TOKEN"]) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+        await ws.close(code=4401)
+        return
+    token = bearer[7:] if bearer.startswith("Bearer ") else ""
+    with database() as conn:
+        row = conn.execute("SELECT token_hash FROM paired_devices WHERE name=?", (name,)).fetchone()
+    valid_pair = bool(row and token and secrets.compare_digest(row["token_hash"], digest(token)))
+    legacy = os.environ.get("DORADO_AGENT_TOKEN", "")
+    valid_legacy = bool(legacy and secrets.compare_digest(token, legacy))
+    if not (valid_pair or valid_legacy):
         await ws.close(code=4401)
         return
     if name in hub.devices:

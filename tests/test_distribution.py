@@ -29,7 +29,7 @@ def test_interactive_config_does_not_echo_token(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv('DORADO_CONFIG_FILE', str(tmp_path / 'agent.json'))
     answers = iter(['my-pc', 'https://mcp.example.com'])
     monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
-    monkeypatch.setattr('remote_dorado.agent.getpass.getpass', lambda prompt: 'secret'*8)
+    monkeypatch.setattr('remote_dorado.agent.pair_with_relay', lambda url, name: 'secret'*8)
     interactive_setup()
     assert read_agent_config()['device_name'] == 'my-pc'
     assert read_agent_config()['agent_token'] == 'secret'*8

@@ -4,8 +4,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fnmatch
-import getpass
 import json
+import httpx
 import os
 from pathlib import Path
 import platform
@@ -14,12 +14,14 @@ import tempfile
 import subprocess
 import sys
 import time
+import webbrowser
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import websockets
 
 from .sessions import sessions
+from .build_config import DEFAULT_RELAY_URL
 
 MAX_OUTPUT = 250_000
 DEVICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
@@ -217,32 +219,85 @@ def ask_device_name(default: str | None = None) -> str:
         print("Use 1-64 letters (A-Z), numbers, underscores or hyphens.")
 
 
-def interactive_setup() -> None:
-    old = read_agent_config()
-    print("Remote Dorado Commander | configure this PC")
-    print("Choose an alias for this computer (visible to ChatGPT and other MCP clients).")
-    default_name = os.environ.get("DORADO_DEVICE_NAME") or old.get("device_name")
-    name = ask_device_name(default_name)
-    print("You also need your own HTTPS relay URL and its DORADO_AGENT_TOKEN.")
-    default_url = os.environ.get("DORADO_PUBLIC_URL") or old.get("public_url", "")
-    raw_url = input(f"Relay URL{f' [{default_url}]' if default_url else ''}: ").strip()
-    url = (raw_url or default_url).rstrip("/")
-    if not url:
-        raise ValueError("A relay URL is required")
+def relay_url(config: dict[str, Any]) -> str:
+    """Public URL is embedded in release builds (not a secret), never guessed."""
+    return (os.environ.get("DORADO_PUBLIC_URL") or config.get("public_url") or
+            os.environ.get("DORADO_DEFAULT_RELAY_URL") or DEFAULT_RELAY_URL).rstrip("/")
+
+
+def validate_relay_url(url: str) -> None:
     parts = urlsplit(url)
     if not ((parts.scheme == "https" and parts.netloc) or
             (parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1"))):
-        raise ValueError("Use https:// for remote access (http://localhost only for local testing)")
+        raise ValueError("A valid HTTPS relay is required (HTTP only for local development)")
     if parts.path.strip("/") or parts.query or parts.fragment or parts.username or parts.password:
-        raise ValueError("Enter the base URL only (for example https://mcp.example.com)")
-    existing_token = os.environ.get("DORADO_AGENT_TOKEN") or old.get("agent_token", "")
-    token = getpass.getpass("Agent token (input hidden; Enter keeps existing): ").strip() or existing_token
-    if len(token) < 32:
-        raise ValueError("DORADO_AGENT_TOKEN must be at least 32 characters")
-    path = save_agent_config({**old, "public_url": url, "agent_token": token,
-                              "device_name": name, "auto_shell": old.get("auto_shell", True)})
-    print(f"Saved locally: {path} (the token is not printed)")
-    print("Start with: remote-dorado-agent")
+        raise ValueError("Enter only the relay origin, for example https://mcp.example.com")
+
+
+def pair_with_relay(url: str, name: str, *, open_browser: bool = True) -> str:
+    """Request user-confirmed device authorization. Never print or ask for agent tokens."""
+    validate_relay_url(url)
+    with httpx.Client(timeout=10, follow_redirects=False) as client:
+        begin = client.post(url + "/pair/device", json={"device_name": name})
+        begin.raise_for_status()
+        request = begin.json()
+        code = request["device_code"]
+        verify = request["verification_uri_complete"]
+        # Never blindly trust a link sent by an untrusted relay / compromised response.
+        if not verify.startswith(url + "/pair?"):
+            raise ValueError("Relay returned an unexpected verification URL")
+        print("\nConnect this computer to your private MCP relay:")
+        print(f"  {verify}")
+        print(f"  Pairing code: {request['user_code']}")
+        print("Approve the computer in your browser with your relay administrator password.")
+        print("This pairs the device to your MCP relay, not to your ChatGPT login directly.")
+        if open_browser and os.environ.get("DORADO_NO_BROWSER") != "1":
+            if not webbrowser.open(verify):
+                print("Open the link above in a browser to continue.")
+        interval = max(3, min(int(request.get("interval", 3)), 30))
+        expires_at = time.monotonic() + max(1, min(int(request["expires_in"]), 900))
+        while time.monotonic() < expires_at:
+            time.sleep(interval)
+            reply = client.post(url + "/pair/token", json={"device_code": code})
+            if reply.status_code == 200:
+                issued = reply.json()
+                if issued.get("device_name") != name or len(issued.get("agent_token", "")) < 32:
+                    raise ValueError("Unexpected pairing response")
+                return issued["agent_token"]
+            error = reply.json().get("error")
+            if reply.status_code == 400 and error == "authorization_pending":
+                continue
+            if error == "slow_down":
+                interval = min(interval + 3, 30)
+                continue
+            raise RuntimeError(f"Pairing refused: {error or reply.status_code}")
+    raise TimeoutError("Pairing expired. Start the agent again for a fresh code.")
+
+
+def interactive_setup(*, force_pair: bool = False) -> None:
+    """First-run wizard: alias + browser approval, no agent token requested."""
+    old = read_agent_config()
+    print("Remote Dorado Commander | connect this computer")
+    name = ask_device_name(os.environ.get("DORADO_DEVICE_NAME") or old.get("device_name"))
+    url = relay_url(old)
+    if not url:
+        print("No relay URL is configured in this release. Your relay administrator must first")
+        print("deploy the server and set the DORADO_DEFAULT_RELAY_URL GitHub repository variable.")
+        url = input("Your relay URL (one-time setup): ").strip().rstrip("/")
+    validate_relay_url(url)
+    old_token = old.get("agent_token", "") if old.get("device_name") == name and old.get("public_url") == url else ""
+    config = {**old, "device_name": name, "public_url": url,
+              "auto_shell": old.get("auto_shell", True)}
+    # On explicit reconfiguration, rotate credentials by completing a new pairing.
+    if force_pair or len(old_token) < 32:
+        config.pop("agent_token", None)
+        save_agent_config(config)
+        new_token = pair_with_relay(url, name)
+        config["agent_token"] = new_token
+    else:
+        config["agent_token"] = old_token
+    path = save_agent_config(config)
+    print(f"\n{ name } paired successfully! Stored private config in: {path}")
 
 
 def is_interactive_terminal() -> bool:
@@ -250,52 +305,56 @@ def is_interactive_terminal() -> bool:
 
 
 def resolve_startup_config(parser: argparse.ArgumentParser, cli_name: str | None) -> tuple[str, str, str, dict[str, Any]]:
-    """On first interactive launch ask for a device alias; never silently use hostname."""
+    """No URL or token prompts if the release knows its relay; saved identity is reused."""
     config = read_agent_config()
-    url = os.environ.get("DORADO_PUBLIC_URL") or config.get("public_url", "")
-    token = os.environ.get("DORADO_AGENT_TOKEN") or config.get("agent_token", "")
+    url = relay_url(config)
     name = cli_name or os.environ.get("DORADO_DEVICE_NAME") or config.get("device_name", "")
+    token = os.environ.get("DORADO_AGENT_TOKEN") or config.get("agent_token", "")
 
     if not name or not url or len(token) < 32:
         if not is_interactive_terminal():
-            parser.error("First launch requires configuration. Run remote-dorado-agent in an interactive terminal "
-                         "(or pass DORADO_DEVICE_NAME, DORADO_PUBLIC_URL and DORADO_AGENT_TOKEN for headless use).")
+            parser.error("Device not linked. Run remote-dorado-agent in a terminal first, "
+                         "or supply DORADO_PUBLIC_URL, DORADO_DEVICE_NAME and DORADO_AGENT_TOKEN for legacy headless use.")
         try:
             if not name and url and len(token) >= 32:
-                # Credentials already come from env or the config: only ask for the alias.
-                print("Welcome to Remote Dorado Commander! Choose the name for this PC/session.")
+                print("Welcome to Remote Dorado Commander! Choose a name for this computer.")
                 name = ask_device_name()
                 config = {**config, "device_name": name, "auto_shell": config.get("auto_shell", True)}
-                path = save_agent_config(config)
-                print(f"Saved PC name {name!r} to {path}")
+                save_agent_config(config)  # Explicit env secrets are NOT persisted.
+            elif name and url and len(token) < 32:
+                validate_relay_url(url)
+                print(f"Connecting {name} to your private relay. Approve the pairing in your browser.")
+                token = pair_with_relay(url, name)
+                config = {**config, "device_name": name, "public_url": url,
+                          "agent_token": token, "auto_shell": config.get("auto_shell", True)}
+                save_agent_config(config)
             else:
-                # First launch with no relay credentials: full wizard, name first.
                 interactive_setup()
                 config = read_agent_config()
                 name = cli_name or os.environ.get("DORADO_DEVICE_NAME") or config.get("device_name", "")
-                url = os.environ.get("DORADO_PUBLIC_URL") or config.get("public_url", "")
+                url = relay_url(config)
                 token = os.environ.get("DORADO_AGENT_TOKEN") or config.get("agent_token", "")
-        except (ValueError, EOFError, KeyboardInterrupt) as exc:
-            parser.error(f"Setup cancelled/invalid: {exc}")
-
+        except (ValueError, EOFError, KeyboardInterrupt, TimeoutError, httpx.HTTPError, RuntimeError) as exc:
+            parser.error(f"Pairing failed: {exc}")
     if not isinstance(name, str) or not DEVICE_NAME_PATTERN.fullmatch(name):
         parser.error("Device name must contain 1-64 ASCII letters, digits, underscores or hyphens")
     if not url or len(token) < 32:
-        parser.error("Set DORADO_PUBLIC_URL and a random DORADO_AGENT_TOKEN (32+ characters)")
+        parser.error("Device not linked: complete browser pairing first")
+    validate_relay_url(url)
     return url, token, name, config
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Connect this machine to your private Dorado MCP server")
-    parser.add_argument("--name", default=None, help="Optional noninteractive override for the saved PC name")
+    parser = argparse.ArgumentParser(description="Connect this machine to your private Dorado MCP relay")
+    parser.add_argument("--name", default=None, help="Optional override for the saved PC name")
     parser.add_argument("--auto-shell", action="store_true", help="Start a persistent interactive shell at startup")
-    parser.add_argument("--setup", action="store_true", help="Reconfigure this PC (including its saved name)")
+    parser.add_argument("--setup", action="store_true", help="Rename/re-link this computer via a browser")
     args = parser.parse_args()
     if args.setup:
         try:
-            interactive_setup()
-        except (ValueError, EOFError, KeyboardInterrupt) as exc:
-            parser.error(f"Setup cancelled/invalid: {exc}")
+            interactive_setup(force_pair=True)
+        except (ValueError, EOFError, KeyboardInterrupt, TimeoutError, httpx.HTTPError, RuntimeError) as exc:
+            parser.error(f"Pairing failed: {exc}")
         return
     url, token, name, config = resolve_startup_config(parser, args.name)
     if not os.environ.get("DORADO_ALLOWED_ROOTS") and config.get("allowed_roots"):

@@ -1,10 +1,10 @@
 """First-run machine naming and returning launches."""
 import argparse
+
 import pytest
 
-from remote_dorado.agent import (
-    ask_device_name, read_agent_config, resolve_startup_config, suggested_device_name,
-)
+from remote_dorado.agent import (ask_device_name, read_agent_config,
+                                 resolve_startup_config, suggested_device_name)
 
 
 def test_first_launch_asks_only_name_when_credentials_exist(tmp_path, monkeypatch, capsys):
@@ -21,8 +21,9 @@ def test_first_launch_asks_only_name_when_credentials_exist(tmp_path, monkeypatc
     assert read_agent_config()["device_name"] == "office_pc"
     assert read_agent_config()["auto_shell"] is True
     assert "a" * 48 not in config_path.read_text()  # env secrets never persisted implicitly
-    assert "office_pc" in capsys.readouterr().out
+    assert "Choose a name" in capsys.readouterr().out
 
+    # Returning launch in a headless environment reuses the name without any prompts.
     monkeypatch.setattr("remote_dorado.agent.is_interactive_terminal", lambda: False)
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("Asked again on returning launch"))
     assert resolve_startup_config(parser, None)[2] == "office_pc"
@@ -39,20 +40,20 @@ def test_first_launch_full_wizard_name_is_first(tmp_path, monkeypatch):
         questions.append(prompt)
         return next(answers)
     monkeypatch.setattr("builtins.input", answer)
-    monkeypatch.setattr("remote_dorado.agent.getpass.getpass", lambda prompt: "b" * 48)
+    monkeypatch.setattr("remote_dorado.agent.pair_with_relay", lambda url, name: "b" * 48)
     url, token, name, config = resolve_startup_config(argparse.ArgumentParser(), None)
     assert name == "my-desktop"
     assert url == "https://mcp.example.com"
     assert token == "b" * 48
     assert questions[0].startswith("Name for this PC/session")
-    assert questions[1].startswith("Relay URL")
+    assert questions[1].startswith("Your relay URL")
     assert read_agent_config()["device_name"] == name
     assert config["auto_shell"] is True
 
 
 def test_invalid_device_name_reprompts_with_safe_default(monkeypatch):
     monkeypatch.setattr("remote_dorado.agent.platform.node", lambda: "lab pc.local")
-    answers = iter(["not valid!", ""])
+    answers = iter(["not valid!", "",])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     assert suggested_device_name() == "lab-pc-local"
     assert ask_device_name() == "lab-pc-local"
@@ -67,7 +68,7 @@ def test_noninteractive_without_name_errors_instead_of_autonaming(tmp_path, monk
     with pytest.raises(SystemExit) as exc:
         resolve_startup_config(argparse.ArgumentParser(), None)
     assert exc.value.code == 2
-    assert "interactive terminal" in capsys.readouterr().err
+    assert "in a terminal first" in capsys.readouterr().err
 
 
 def test_headless_env_override_and_saved_name(tmp_path, monkeypatch):
