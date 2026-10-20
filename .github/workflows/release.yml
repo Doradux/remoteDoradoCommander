@@ -1,0 +1,128 @@
+name: Build private installers and GitHub Release
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pyproject.toml'
+      - 'remote_dorado/**'
+      - 'scripts/**'
+      - '.github/workflows/release.yml'
+      - 'tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dorado-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        shell: bash
+        run: |
+          VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          TAG="v$VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG exists; bump the pyproject version to publish a new release."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+  tests:
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[test]'
+      - run: pytest -q
+      - run: bash -n scripts/install.sh
+  binaries:
+    needs: [version, tests]
+    if: needs.version.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: windows-2022
+            platform: windows-x64
+          - runner: macos-15-intel
+            platform: macos-x64
+          - runner: macos-15
+            platform: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install . "pyinstaller>=6.10,<7"
+      - name: Build standalone device agent
+        run: python -m PyInstaller --noconfirm --clean --onefile --name remote-dorado-agent --collect-all websockets scripts/agent_entry.py
+      - name: Agent smoke test (runs without Python installation)
+        run: python -c "import pathlib,subprocess,sys; p=pathlib.Path('dist')/('remote-dorado-agent.exe' if sys.platform=='win32' else 'remote-dorado-agent'); r=subprocess.run([str(p.resolve()),'--help'],text=True,capture_output=True,timeout=25); print(r.stdout,r.stderr); assert r.returncode==0 and '--setup' in r.stdout"
+      - name: Package device agent
+        run: python scripts/package_release.py --platform ${{ matrix.platform }} --component agent
+      - name: Build Linux relay server
+        if: matrix.platform == 'linux-x64'
+        run: python -m PyInstaller --noconfirm --clean --onefile --name remote-dorado-server --collect-all uvicorn --collect-all fastapi --collect-all starlette --collect-all pydantic --collect-all multipart --collect-all websockets --collect-all anyio scripts/server_entry.py
+      - name: Package Linux relay server
+        if: matrix.platform == 'linux-x64'
+        run: python scripts/package_release.py --platform linux-x64 --component server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: release-assets/*
+          if-no-files-found: error
+  wheel:
+    needs: [version, tests]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install build
+      - run: python -m build --wheel --outdir release-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: release-assets/*.whl
+          if-no-files-found: error
+  release:
+    needs: [version, binaries, wheel]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - run: python scripts/package_release.py --checksums --output release-assets
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Remote Dorado Commander ${{ needs.version.outputs.tag }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
