@@ -2,7 +2,7 @@
 
 Un MCP remoto **autoalojado**, creado de forma independiente, para usar tus propios equipos desde clientes MCP remotos (incluido ChatGPT, cuando tu cuenta tenga habilitadas las acciones necesarias). **Sin cuotas de llamadas ni suscripción del proveedor original**: tú alojas el relay y el agente. Siguen existiendo los límites de tu infraestructura y de cada cliente/plataforma de IA.
 
-> **Estado: MVP v0.3.0**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
+> **Estado: MVP v0.3.1**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
 
 ## Arquitectura
 
@@ -29,7 +29,7 @@ ChatGPT / otro cliente MCP -- HTTPS + OAuth/PKCE --> TU SERVIDOR /mcp
 
 Dado que **el repositorio es privado**, instala [GitHub CLI](https://cli.github.com/) y autoriza la cuenta que tiene acceso con `gh auth login` (una vez por ordenador). **No** expongas credenciales en comandos ni publiques el repositorio para evitar la autenticación.
 
-**Linux / macOS** (Bash; detecta arquitectura automáticamente; verifica SHA256 y pregunta por el URL/token del agente):
+**Linux / macOS** (Bash; detecta arquitectura automáticamente; verifica SHA256; el asistente de configuración aparece en el primer arranque del agente):
 
 ```bash
 bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) agent
@@ -41,7 +41,7 @@ bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDorado
 & ([scriptblock]::Create((gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.ps1 | Out-String)))
 ```
 
-Una vez instalado, **arranca el agente** con `remote-dorado-agent` (o su ruta impresa por el instalador). El asistente `--setup` guarda URL, nombre del PC y token de forma local, sin incluir el token en el historial de la terminal. Abre automáticamente una shell persistente al arrancar. Debe existir primero un **servidor remoto desplegado por ti**, accesible por HTTPS; el instalador no te da un relay alojado gratuitamente.
+Una vez instalado, **arranca el agente** con `remote-dorado-agent` (o su ruta impresa por el instalador). **La primera vez que lo ejecutes en cada PC**, preguntará primero el **nombre del equipo/sesión** (proponiendo el hostname como sugerencia), después la URL del relay y el token oculto. Guardará estos datos localmente. En los siguientes arranques **no volverá a preguntar el nombre ni hará falta pasarlo como argumento**. Usa `remote-dorado-agent --setup` para cambiarlo más adelante. El instalador únicamente descarga el binario; el asistente se abre al **ejecutarlo**, no durante la instalación. Por defecto el asistente activa también una shell persistente al iniciar. Debe existir primero un **servidor remoto desplegado por ti**, accesible por HTTPS; el instalador no te da un relay alojado gratuitamente.
 
 Instalar el **servidor Linux x64** como binario (aunque en un VPS es preferible el Docker Compose de más abajo):
 
@@ -49,7 +49,7 @@ Instalar el **servidor Linux x64** como binario (aunque en un VPS es preferible 
 bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) server
 ```
 
-Para instalación no interactiva: añade `--no-setup` tras `agent` y usa `DORADO_PUBLIC_URL`, `DORADO_AGENT_TOKEN` y `DORADO_DEVICE_NAME` como variables de entorno. Puedes cambiar el destino en Unix con `DORADO_INSTALL_DIR`. Para actualizar, vuelve a ejecutar la misma orden; se descarga la última Release. Las builds son **por arquitectura** y no incorporan ni publican tus secretos.
+Para instalaciones **no interactivas** usa las variables `DORADO_PUBLIC_URL`, `DORADO_AGENT_TOKEN` y `DORADO_DEVICE_NAME`; en ese caso el agente no preguntará nada. Con URL/token ya configurados pero sin nombre guardado, preguntará **solo el nombre** y lo almacenará. Puedes cambiar el destino en Unix con `DORADO_INSTALL_DIR`. Para actualizar, vuelve a ejecutar la misma orden; se descarga la última Release. Las builds son **por arquitectura** y no incorporan ni publican tus secretos.
 
 **Alternativa pip sin clonar:**
 
@@ -111,7 +111,7 @@ pip install -e .
 export DORADO_PUBLIC_URL=https://mcp.TU-DOMINIO.com
 export DORADO_AGENT_TOKEN='VALOR_ALEATORIO_DEL_SERVIDOR'
 export DORADO_ALLOWED_ROOTS="$HOME"
-remote-dorado-agent --name marcos --auto-shell
+remote-dorado-agent
 ```
 
 En **PowerShell** (instalación previa con `py -m pip install -e .`):
@@ -123,7 +123,7 @@ $env:DORADO_ALLOWED_ROOTS=$HOME
 remote-dorado-agent --name marcos --auto-shell
 ```
 
-Para otro equipo, usa otro nombre (`marcos-hpr`, `servidor`, etc.). El agente debe permanecer ejecutándose (systemd, servicio de Windows, tmux o supervisor de procesos) para que ChatGPT llegue al equipo. Sin el agente, no hay acceso.
+En cada equipo, introduce un nombre diferente (`marcos`, `marcos-hpr`, `servidor`, etc.) la primera vez; se recuerda para futuros arranques. El agente debe permanecer ejecutándose (systemd, servicio de Windows, tmux o supervisor de procesos) para que ChatGPT llegue al equipo. Sin el agente, no hay acceso.
 
 ## Trabajar con varios PCs y shells activas
 
