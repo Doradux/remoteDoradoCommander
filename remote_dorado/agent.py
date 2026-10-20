@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import tempfile
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import websockets
 from .sessions import sessions
 
 MAX_OUTPUT = 250_000
+DEVICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
 def allowed_roots() -> list[Path]:
@@ -130,7 +132,7 @@ def websocket_address(base_url: str) -> str:
 
 
 async def run_agent(url: str, token: str, name: str) -> None:
-    if not name or len(name) > 64 or not all(c.isalnum() or c in "_-" for c in name):
+    if not DEVICE_NAME_PATTERN.fullmatch(name):
         raise ValueError("Device name must be 1-64 letters, digits, underscores or hyphens")
     delay = 1
     while True:
@@ -199,10 +201,29 @@ def save_agent_config(data: dict[str, Any]) -> Path:
     return path
 
 
+def suggested_device_name() -> str:
+    """Offer a server-compatible hostname without silently choosing it."""
+    name = re.sub(r"[^A-Za-z0-9_-]+", "-", platform.node()).strip("-_")[:64]
+    return name or "my-pc"
+
+
+def ask_device_name(default: str | None = None) -> str:
+    """Ask once, validate the alias, then let the caller persist it."""
+    default = default if default and DEVICE_NAME_PATTERN.fullmatch(default) else suggested_device_name()
+    while True:
+        name = input(f"Name for this PC/session [{default}]: ").strip() or default
+        if DEVICE_NAME_PATTERN.fullmatch(name):
+            return name
+        print("Use 1-64 letters (A-Z), numbers, underscores or hyphens.")
+
+
 def interactive_setup() -> None:
     old = read_agent_config()
     print("Remote Dorado Commander | configure this PC")
-    print("You need your own HTTPS relay URL and its DORADO_AGENT_TOKEN.")
+    print("Choose an alias for this computer (visible to ChatGPT and other MCP clients).")
+    default_name = os.environ.get("DORADO_DEVICE_NAME") or old.get("device_name")
+    name = ask_device_name(default_name)
+    print("You also need your own HTTPS relay URL and its DORADO_AGENT_TOKEN.")
     default_url = os.environ.get("DORADO_PUBLIC_URL") or old.get("public_url", "")
     raw_url = input(f"Relay URL{f' [{default_url}]' if default_url else ''}: ").strip()
     url = (raw_url or default_url).rstrip("/")
@@ -214,23 +235,61 @@ def interactive_setup() -> None:
         raise ValueError("Use https:// for remote access (http://localhost only for local testing)")
     if parts.path.strip("/") or parts.query or parts.fragment or parts.username or parts.password:
         raise ValueError("Enter the base URL only (for example https://mcp.example.com)")
-    token = getpass.getpass("Agent token (input hidden; Enter keeps existing): ").strip() or old.get("agent_token", "")
+    existing_token = os.environ.get("DORADO_AGENT_TOKEN") or old.get("agent_token", "")
+    token = getpass.getpass("Agent token (input hidden; Enter keeps existing): ").strip() or existing_token
     if len(token) < 32:
         raise ValueError("DORADO_AGENT_TOKEN must be at least 32 characters")
-    default_name = old.get("device_name", platform.node())
-    name = input(f"PC name [{default_name}]: ").strip() or default_name
-    if not 1 <= len(name) <= 64 or not all(c.isalnum() or c in "_-" for c in name):
-        raise ValueError("Device name must be 1-64 letters, digits, underscores or hyphens")
-    path = save_agent_config({"public_url": url, "agent_token": token, "device_name": name, "auto_shell": True})
+    path = save_agent_config({**old, "public_url": url, "agent_token": token,
+                              "device_name": name, "auto_shell": old.get("auto_shell", True)})
     print(f"Saved locally: {path} (the token is not printed)")
     print("Start with: remote-dorado-agent")
 
 
+def is_interactive_terminal() -> bool:
+    return sys.stdin.isatty()
+
+
+def resolve_startup_config(parser: argparse.ArgumentParser, cli_name: str | None) -> tuple[str, str, str, dict[str, Any]]:
+    """On first interactive launch ask for a device alias; never silently use hostname."""
+    config = read_agent_config()
+    url = os.environ.get("DORADO_PUBLIC_URL") or config.get("public_url", "")
+    token = os.environ.get("DORADO_AGENT_TOKEN") or config.get("agent_token", "")
+    name = cli_name or os.environ.get("DORADO_DEVICE_NAME") or config.get("device_name", "")
+
+    if not name or not url or len(token) < 32:
+        if not is_interactive_terminal():
+            parser.error("First launch requires configuration. Run remote-dorado-agent in an interactive terminal "
+                         "(or pass DORADO_DEVICE_NAME, DORADO_PUBLIC_URL and DORADO_AGENT_TOKEN for headless use).")
+        try:
+            if not name and url and len(token) >= 32:
+                # Credentials already come from env or the config: only ask for the alias.
+                print("Welcome to Remote Dorado Commander! Choose the name for this PC/session.")
+                name = ask_device_name()
+                config = {**config, "device_name": name, "auto_shell": config.get("auto_shell", True)}
+                path = save_agent_config(config)
+                print(f"Saved PC name {name!r} to {path}")
+            else:
+                # First launch with no relay credentials: full wizard, name first.
+                interactive_setup()
+                config = read_agent_config()
+                name = cli_name or os.environ.get("DORADO_DEVICE_NAME") or config.get("device_name", "")
+                url = os.environ.get("DORADO_PUBLIC_URL") or config.get("public_url", "")
+                token = os.environ.get("DORADO_AGENT_TOKEN") or config.get("agent_token", "")
+        except (ValueError, EOFError, KeyboardInterrupt) as exc:
+            parser.error(f"Setup cancelled/invalid: {exc}")
+
+    if not isinstance(name, str) or not DEVICE_NAME_PATTERN.fullmatch(name):
+        parser.error("Device name must contain 1-64 ASCII letters, digits, underscores or hyphens")
+    if not url or len(token) < 32:
+        parser.error("Set DORADO_PUBLIC_URL and a random DORADO_AGENT_TOKEN (32+ characters)")
+    return url, token, name, config
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Connect this machine to your private Dorado MCP server")
-    parser.add_argument("--name", default=os.environ.get("DORADO_DEVICE_NAME", platform.node()))
+    parser.add_argument("--name", default=None, help="Optional noninteractive override for the saved PC name")
     parser.add_argument("--auto-shell", action="store_true", help="Start a persistent interactive shell at startup")
-    parser.add_argument("--setup", action="store_true", help="Interactively configure this machine (no repository or Python needed with binary release)")
+    parser.add_argument("--setup", action="store_true", help="Reconfigure this PC (including its saved name)")
     args = parser.parse_args()
     if args.setup:
         try:
@@ -238,19 +297,13 @@ def main() -> None:
         except (ValueError, EOFError, KeyboardInterrupt) as exc:
             parser.error(f"Setup cancelled/invalid: {exc}")
         return
-    config = read_agent_config()
-    url = os.environ.get("DORADO_PUBLIC_URL") or config.get("public_url", "")
-    token = os.environ.get("DORADO_AGENT_TOKEN") or config.get("agent_token", "")
+    url, token, name, config = resolve_startup_config(parser, args.name)
     if not os.environ.get("DORADO_ALLOWED_ROOTS") and config.get("allowed_roots"):
         os.environ["DORADO_ALLOWED_ROOTS"] = str(config["allowed_roots"])
-    if args.name == platform.node() and not os.environ.get("DORADO_DEVICE_NAME"):
-        args.name = config.get("device_name", args.name)
-    if not url or len(token) < 32:
-        parser.error("Set DORADO_PUBLIC_URL and a random DORADO_AGENT_TOKEN (32+ characters)")
     if args.auto_shell or os.environ.get("DORADO_AUTO_SHELL", "0") == "1" or config.get("auto_shell", False):
         created = sessions.start(checked_path(str(Path.home()), must_exist=True))
         print(f"Persistent shell ready: {created['session_id']} ({created['pid']})", flush=True)
-    asyncio.run(run_agent(url, token, args.name))
+    asyncio.run(run_agent(url, token, name))
 
 
 if __name__ == "__main__":
