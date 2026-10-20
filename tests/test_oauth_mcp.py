@@ -83,6 +83,8 @@ def test_agent_auth(client):
     with client.websocket_connect("/agent/ws", headers={"Authorization": "Bearer " + "a" * 48, "X-Device-Name": "test"}):
         assert client.get("/health").json()["online_devices"] == 1
     assert client.get("/health").json()["online_devices"] == 0
+    with client.websocket_connect("/agent/ws", headers={"Authorization": "Bearer " + "a" * 48, "X-Device-Name": "other"}):
+        assert client.get("/health").json()["online_devices"] == 1
 
 
 def test_end_to_end_relay(client):
@@ -101,3 +103,50 @@ def test_end_to_end_relay(client):
             outcome = future.result(timeout=10)
             assert outcome.status_code == 200
             assert "Hello from paired device" in outcome.json()["result"]["content"][0]["text"]
+
+
+def test_multiple_pc_discovery_and_sessions(client):
+    """One tool can query shell inventories on multiple concurrently-connected agents."""
+    from concurrent.futures import ThreadPoolExecutor
+    import json
+
+    cid, verifier, redirect, code = start_oauth(client)
+    grant = client.post("/oauth/token", data={"grant_type": "authorization_code", "client_id": cid, "code": code, "redirect_uri": redirect, "code_verifier": verifier})
+    headers = {"Authorization": "Bearer " + grant.json()["access_token"]}
+
+    def mcp_call(name, args):
+        rpc = {"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": name, "arguments": args}}
+        r = client.post("/mcp", json=rpc, headers=headers)
+        assert r.status_code == 200, r.text
+        return json.loads(r.json()["result"]["content"][0]["text"])
+
+    auth = {"Authorization": "Bearer " + "a" * 48}
+    with client.websocket_connect("/agent/ws", headers={**auth, "X-Device-Name": "marcos"}) as pc1:
+        with client.websocket_connect("/agent/ws", headers={**auth, "X-Device-Name": "marcos-hpr"}) as pc2:
+            result = mcp_call("list_devices", {})
+            assert result["devices"] == ["marcos", "marcos-hpr"]
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(mcp_call, "list_all_sessions", {})
+                req1 = pc1.receive_json()
+                req2 = pc2.receive_json()
+                assert req1["op"] == req2["op"] == "list_active_sessions"
+                pc1.send_json({"id": req1["id"], "result": {"sessions": [{"session_id": "aaa", "status": "running"}]}})
+                pc2.send_json({"id": req2["id"], "result": {"sessions": [{"session_id": "bbb", "status": "exited"}]}})
+                result = future.result(timeout=10)
+            assert result["count"] == 2
+            assert {(s["device"], s["session_id"]) for s in result["sessions"]} == {("marcos", "aaa"), ("marcos-hpr", "bbb")}
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(mcp_call, "send_input_to_process", {"device": "marcos-hpr", "session_id": "bbb", "input": "pwd"})
+                message = pc2.receive_json()
+                assert message["op"] == "send_input_to_process" and message["args"]["session_id"] == "bbb"
+                pc2.send_json({"id": message["id"], "result": {"sent_bytes": 4}})
+                assert future.result(timeout=10)["sent_bytes"] == 4
+
+
+def test_offline_device_discovery(client):
+    from remote_dorado.server import database
+    with client.websocket_connect("/agent/ws", headers={"Authorization": "Bearer " + "a" * 48, "X-Device-Name": "test-machine"}):
+        pass
+    with database() as db:
+        row = db.execute("SELECT name,last_seen FROM known_devices WHERE name=?", ("test-machine",)).fetchone()
+    assert row["name"] == "test-machine" and row["last_seen"] > 0
