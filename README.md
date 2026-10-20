@@ -6,7 +6,6 @@
 
 A **self-hosted remote MCP** implementation, developed independently, that lets remote MCP clients (including ChatGPT, where the required capabilities are available) work on computers you own. **No original vendor subscription or per-call quota**: you operate the relay and the device agents yourself. Your hosting infrastructure and AI client/platform may still impose their own limits.
 
-> **Status: MVP v0.4.0**. Automated tests cover OAuth, PKCE, token refresh, MCP JSON-RPC, and WebSocket routing. This is not an exact replica or a version of the proprietary Remote Desktop Commander service. A real-world deployment and an end-to-end ChatGPT connection have not yet been verified.
 
 ### Architecture
 
@@ -27,9 +26,9 @@ ChatGPT / another MCP client -- HTTPS + OAuth/PKCE --> YOUR RELAY /mcp
 - **Tools**: `list_devices`, `ping_device`, `list_directory`, `read_file`, `write_file`, `edit_file`, `search_files`, `execute_command`, `list_active_sessions`, `list_all_sessions`, `start_process`, `send_input_to_process`, `read_process_output`, `terminate_session`, `forget_session`.
 - No vendor service calls, metered billing, or built-in call quotas. Default resource limits include 16 concurrent operations, 250 KB per command output stream, and a 120-second command timeout. These are safety/resource limits, not paid-call limits.
 
-### Simple first-run pairing (v0.4.0)
+### Pairing a computer
 
-**You no longer have to locate or enter `DORADO_AGENT_TOKEN` on each computer.** The agent requests a short-lived authorization from **your relay**, opens a browser page, and displays a pairing code. Approve that device with your relay administrator password. The server issues a **device-specific credential**, saved locally in a private configuration file and reused on subsequent launches. Re-pairing the same device name invalidates its previous token.
+The agent requests a temporary pairing code from **your relay**, opens the authorization page in a browser, and waits for your approval with the relay administrator password. Each computer receives its own credential, stored securely in its local configuration and reused on subsequent launches. Re-pairing a device rotates its credential.
 
 ```text
 $ remote-dorado-agent
@@ -39,11 +38,11 @@ Enter your relay administrator password and click Authorize.
 Device paired! Future launches connect without prompting.
 ```
 
-**No relay URL prompt on the PC once the relay is configured**: set the **GitHub Actions repository variable** `DORADO_DEFAULT_RELAY_URL=https://mcp.yourdomain.com` under Settings → Secrets and variables → Actions → Variables. Builds embed this **public URL only**, never a password or secret. You must **deploy your HTTPS relay first**, then publish a **new binary release**. If no relay is deployed or the build variable is missing, the agent must request the relay URL once; it cannot discover a server that does not yet exist.
+**Preset relay address for distributed builds:** set the GitHub Actions repository variable `DORADO_DEFAULT_RELAY_URL=https://mcp.yourdomain.com` under Settings → Secrets and variables → Actions → Variables. Compiled executables include this **public address only**, never passwords or credentials. Deploy your HTTPS relay and configure the variable before building the executable. Without a preset address, the agent asks for the relay URL at first launch.
 
-**Connect ChatGPT to the relay separately, once:** add a custom MCP server in ChatGPT (Plugins → Add custom MCP server) using `https://mcp.yourdomain.com/mcp` and authorize the relay OAuth flow. Additional PCs paired with that same relay then appear in `list_devices` **without adding the connector again**. **Pairing in a browser is not signing in with your OpenAI account**: an arbitrary local executable cannot use or validate your private ChatGPT login session through a supported mechanism. The relay manages identity and permissions using its own OAuth and administrator password. ChatGPT capabilities remain subject to your account and workspace permissions.
+**Connect ChatGPT:** add a custom MCP server in ChatGPT using `https://mcp.yourdomain.com/mcp` and authorize it using OAuth. Computers paired with the same relay appear in `list_devices`. The local agent does not access your private ChatGPT credentials or login session: your relay handles authorization with OAuth. Available actions depend on ChatGPT account and workspace permissions.
 
-**Commands:** `remote-dorado-agent` starts normally or initiates pairing on first use; `remote-dorado-agent --setup` reconfigures the machine and requests a new pairing code. Legacy environment variables remain available for unattended deployments but are not necessary for ordinary use.
+**Commands:** `remote-dorado-agent` starts the agent and opens the pairing flow when needed. `remote-dorado-agent --setup` opens the configuration and pairing flow.
 
 > Security: only approve codes displayed by computers you control. MCP tools can execute commands and modify files with the agent user's privileges. Protect the relay with HTTPS, a strong password, and access controls.
 
@@ -65,7 +64,7 @@ bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDorado
 & ([scriptblock]::Create((gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.ps1 | Out-String)))
 ```
 
-After installation, **start the agent** with `remote-dorado-agent`. On its first run, choose the **device/session name** (the hostname is suggested) and authorize the **pairing code in your browser**. It only asks for a relay URL once if the binary does not already know the address; it never asks you to copy a token. Subsequent runs connect automatically. Use `remote-dorado-agent --setup` to change the configuration. The installer only downloads the executable. By default, the first run also starts a persistent shell. **You must deploy your own HTTPS relay beforehand**: the installer does not provide a hosted relay.
+After installing, run `remote-dorado-agent`. Enter a **device name** (the hostname is suggested) and authorize the **pairing code** in your browser. If the build has no preset relay address, enter its URL. The agent stores its configuration locally and starts a persistent shell by default. Run `remote-dorado-agent --setup` to change the device settings. **A deployed HTTPS relay is required.**
 
 To install the **Linux x64 server** as a standalone executable (Docker Compose is preferable for a VPS):
 
@@ -73,7 +72,7 @@ To install the **Linux x64 server** as a standalone executable (Docker Compose i
 bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) server
 ```
 
-For **non-interactive installations**, pair the device first and then run its agent as a service. Legacy variables `DORADO_PUBLIC_URL`, `DORADO_AGENT_TOKEN`, and `DORADO_DEVICE_NAME` are still supported for existing automation. Set `DORADO_INSTALL_DIR` to change the Unix installation directory. Run the same installer again to update to the latest Release. Builds are **architecture-specific** and never bundle your secrets.
+For **non-interactive installations**, pair each device interactively, then run the agent as a service. Use `DORADO_INSTALL_DIR` to select the Unix installation directory. Rerun the installer to download the latest Release. Builds are **architecture-specific** and do not bundle secrets.
 
 **Alternative pip installation, without cloning:**
 
@@ -82,7 +81,7 @@ gh release download --repo Doradux/remoteDoradoCommander -p '*.whl' -D /tmp/dora
 pipx install /tmp/dorado-wheel/*.whl
 ```
 
-There is no npm package published yet, so a public `npx` installation command is not available until a package is published. For now, Releases avoid cloning the repository and do not require Python to run the agent. GitHub Actions for private repositories can incur billed build minutes depending on your GitHub plan.
+Private GitHub Releases provide executable installation without downloading the source repository or requiring Python on the target PC. GitHub Actions build minutes may be billed depending on your plan.
 
 ### Deploying the relay (Linux + Docker)
 
@@ -171,7 +170,7 @@ Implementation details: Linux/macOS use a pseudo-terminal (PTY); Windows uses a 
 4. On the authorization page **served by your domain**, enter `DORADO_ADMIN_PASSWORD` and approve access.
 5. Discover the tools, create/enable the app, then test `list_devices` and `ping_device` in a compatible chat.
 
-**Important:** uploading this code to GitHub or publishing a Release does not connect it to ChatGPT. The relay must be running at a public HTTPS endpoint, and agents must be running on the devices you wish to control. ChatGPT may restrict terminal/write operations even if the MCP server declares those tools; this implementation cannot override ChatGPT platform restrictions.
+**Required for ChatGPT integration:** run the relay at a public HTTPS endpoint and keep agents online on the computers you want to access. Available terminal and file actions depend on ChatGPT permissions.
 
 ### Security
 
@@ -182,7 +181,7 @@ Implementation details: Linux/macOS use a pseudo-terminal (PTY); Windows uses a 
 - `DORADO_ALLOWED_ROOTS` restricts file-tool paths but **is not a sandbox**: shell commands can reach anything the OS user can access.
 - `write_file` does not overwrite by default; `edit_file` requires an exact unique match. Commands have timeouts, bounded output, and concurrency limits.
 - To revoke **all** OAuth sessions, stop the relay, back up its data, and delete `data/dorado.sqlite3` (which also removes registered clients/tokens). Changing only the administrator password does **not** revoke existing tokens.
-- Stopping an agent immediately cuts access to that device. Re-pairing the same name rotates its individual token; `DORADO_AGENT_TOKEN` is a legacy option and should not be used for new installs.
+- Stopping an agent cuts access to that device. Re-pairing rotates that device's credential.
 - The OAuth dynamic registration endpoint is public for compatibility; protect it using a firewall, reverse proxy, and rate limiting. This MVP has no advanced user administration, multi-owner isolation, or persistent audit logging.
 
 ### Development
@@ -211,7 +210,6 @@ This is an **independent implementation licensed under MIT**. The repository `de
 
 Un MCP remoto **autoalojado**, creado de forma independiente, para usar tus propios equipos desde clientes MCP remotos (incluido ChatGPT, cuando tu cuenta tenga habilitadas las acciones necesarias). **Sin cuotas de llamadas ni suscripción del proveedor original**: tú alojas el relay y el agente. Siguen existiendo los límites de tu infraestructura y de cada cliente/plataforma de IA.
 
-> **Estado: MVP v0.4.0**. Probadas las rutas OAuth, PKCE, refresh, JSON-RPC MCP y el encaminamiento WebSocket con tests automatizados. No es una copia exacta ni una versión del servicio propietario Remote Desktop Commander. No hay despliegue ni conexión real con ChatGPT comprobados todavía.
 
 ### Arquitectura
 
@@ -232,9 +230,9 @@ ChatGPT / otro cliente MCP -- HTTPS + OAuth/PKCE --> TU SERVIDOR /mcp
 - Herramientas: `list_devices`, `ping_device`, `list_directory`, `read_file`, `write_file`, `edit_file`, `search_files`, `execute_command`, `list_active_sessions`, `list_all_sessions`, `start_process`, `send_input_to_process`, `read_process_output`, `terminate_session`, `forget_session`.
 - Sin llamadas a servicios del proveedor ni contador/cuota incorporados. Concurrencia simultánea máxima por defecto: 16; salida máxima por stream de comando: 250 KB; timeout de comando: 120 s. Son límites de seguridad/recursos, no cobros por número de llamadas.
 
-### Vinculación sencilla al primer arranque (v0.4.0)
+### Vincular un ordenador
 
-**Ya no tienes que buscar ni escribir `DORADO_AGENT_TOKEN` en el ordenador.** Cada agente solicita una autorización temporal a *tu relay*, abre una página en el navegador y enseña un código. Allí apruebas el equipo con la contraseña del administrador del relay. El servidor emite una **credencial exclusiva de ese PC**, que se guarda localmente (archivo privado) y se reutiliza al arrancar. Volver a vincular el mismo nombre invalida el token anterior.
+El agente solicita un código temporal de vinculación a **tu servidor**, abre la página de autorización en el navegador y espera tu aprobación con la contraseña de administración. Cada ordenador recibe una credencial propia, que se guarda de forma segura en la configuración local y se reutiliza en los siguientes arranques. Al volver a vincular un equipo, se renueva su credencial.
 
 ```text
 $ remote-dorado-agent
@@ -244,11 +242,11 @@ Introduce la contraseña de administración de tu relay y pulsa Autorizar.
 ¡Equipo vinculado! En siguientes ejecuciones no pregunta nada.
 ```
 
-**Cero URLs en el PC cuando esté configurado el servidor:** define la variable **de repositorio GitHub Actions** `DORADO_DEFAULT_RELAY_URL=https://mcp.tudominio.es` (Settings → Secrets and variables → Actions → Variables). La build incrustará esta dirección **pública, sin secretos** en los binarios que publica. No incrustes contraseña ni token. Para incluir la URL, necesitas **desplegar el relay HTTPS primero** y después publicar una **nueva versión** del ejecutable. Mientras no exista ese servidor o la variable no esté configurada, el programa debe solicitar la dirección del relay una vez; no puede adivinar un servidor que todavía no existe.
+**Dirección del servidor preconfigurada:** define la variable de repositorio de GitHub Actions `DORADO_DEFAULT_RELAY_URL=https://mcp.tudominio.es` en Settings → Secrets and variables → Actions → Variables. Los ejecutables incluyen únicamente esa **dirección pública**, nunca contraseñas ni credenciales. Despliega el servidor HTTPS y configura la variable antes de compilar. Sin una dirección preconfigurada, el agente solicita la URL del servidor en su primer arranque.
 
-**ChatGPT se conecta una sola vez por separado:** instala el MCP en ChatGPT (Plugins → Añadir servidor MCP personalizado) usando `https://mcp.tudominio.es/mcp` y aprueba el OAuth del servidor. Al vincular más PCs al mismo relay, aparecerán en `list_devices` **sin añadir el conector otra vez**. **El navegador de vinculación no es un login con tu cuenta de OpenAI**: no existe una forma soportada de obtener o comprobar la sesión privada de ChatGPT desde un ejecutable local arbitrario. La identidad/permiso se gestionan en tu relay mediante OAuth y contraseña administrativa. El MCP de ChatGPT puede tener restricciones propias según plan y permisos.
+**Conectar ChatGPT:** añade el servidor MCP personalizado en ChatGPT usando `https://mcp.tudominio.es/mcp` y autoriza el acceso mediante OAuth. Los demás ordenadores vinculados al mismo servidor aparecen en `list_devices`. El programa local no utiliza las credenciales ni la sesión privada de ChatGPT: la autorización la gestiona tu propio servidor mediante OAuth. La disponibilidad de las herramientas depende de los permisos de ChatGPT.
 
-**Comandos:** `remote-dorado-agent` arranca o vincula si es la primera vez; `remote-dorado-agent --setup` reconfigura el equipo y genera un nuevo código de vinculación. Puedes seguir usando variables de entorno en despliegues automatizados antiguos, pero no hacen falta para un usuario normal.
+**Comandos:** `remote-dorado-agent` inicia el agente y abre la vinculación cuando hace falta. `remote-dorado-agent --setup` abre la configuración y el proceso de vinculación.
 
 > Seguridad: autoriza solamente códigos que aparecen en un equipo tuyo. Las herramientas MCP pueden ejecutar comandos y modificar archivos con los privilegios de ese usuario. El relay debe usar HTTPS, contraseña fuerte y límites de acceso.
 
@@ -270,7 +268,7 @@ bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDorado
 & ([scriptblock]::Create((gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.ps1 | Out-String)))
 ```
 
-Una vez instalado, **arranca el agente** con `remote-dorado-agent`. La primera vez indica el **nombre del equipo/sesión** (propone el hostname) y abre una página de **vinculación por código**. Solo si el binario aún no conoce el relay te preguntará su URL una vez; nunca te pedirá copiar un token. En los siguientes arranques se conecta automáticamente. Usa `remote-dorado-agent --setup` para reconfigurarlo. El instalador únicamente descarga el binario. Por defecto el primer arranque activa también una shell persistente. **Necesitas tener previamente desplegado tu relay con HTTPS**: el instalador no te proporciona un servidor alojado.
+Tras instalarlo, ejecuta `remote-dorado-agent`. Introduce un **nombre de equipo** (se propone el hostname) y autoriza el **código de vinculación** en el navegador. Si el ejecutable no tiene una dirección preconfigurada, introduce la URL del servidor. El agente guarda su configuración localmente y abre una shell persistente por defecto. Usa `remote-dorado-agent --setup` para cambiar la configuración. **Es necesario tener el servidor HTTPS desplegado.**
 
 Instalar el **servidor Linux x64** como binario (aunque en un VPS es preferible el Docker Compose de más abajo):
 
@@ -278,7 +276,7 @@ Instalar el **servidor Linux x64** como binario (aunque en un VPS es preferible 
 bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) server
 ```
 
-Para instalaciones **no interactivas**, vincula primero el dispositivo y después ejecuta su agente como servicio. Las variables heredadas `DORADO_PUBLIC_URL`, `DORADO_AGENT_TOKEN` y `DORADO_DEVICE_NAME` siguen aceptándose para automatizaciones existentes. Puedes cambiar el destino en Unix con `DORADO_INSTALL_DIR`. Para actualizar, vuelve a ejecutar la misma orden; se descarga la última Release. Las builds son **por arquitectura** y no incorporan ni publican tus secretos.
+Para instalaciones **no interactivas**, vincula cada equipo de forma interactiva y después ejecuta el agente como servicio. Usa `DORADO_INSTALL_DIR` para elegir el directorio de instalación en Unix. Repite el instalador para descargar la última versión. Las compilaciones son **específicas de cada arquitectura** y no incluyen secretos.
 
 **Alternativa pip sin clonar:**
 
@@ -287,7 +285,7 @@ gh release download --repo Doradux/remoteDoradoCommander -p '*.whl' -D /tmp/dora
 pipx install /tmp/dorado-wheel/*.whl
 ```
 
-No hay paquete publicado en npm todavía: un comando `npx` público no funcionaría mientras no se publique en el registro npm. Por ahora la descarga desde Releases evita copiar el repositorio y evita depender de Python instalado para el agente. Las Actions del repositorio privado pueden consumir minutos facturables según tu plan de GitHub.
+Las Releases privadas de GitHub permiten instalar ejecutables sin descargar el código fuente ni necesitar Python en el PC. GitHub Actions puede consumir minutos de compilación facturables según tu plan.
 
 ### Preparar el servidor (Linux + Docker)
 
@@ -376,7 +374,7 @@ Detalles de implementación: Linux/macOS usan una pseudo-terminal (PTY); Windows
 4. En la pantalla de autorización de **tu dominio** introduce el valor `DORADO_ADMIN_PASSWORD` y aprueba el acceso.
 5. Escanea las herramientas, crea/activa la aplicación y prueba `list_devices` y `ping_device` en un chat compatible.
 
-**Importante**: la integración no se activa por subir el proyecto a GitHub ni publicar una Release: debes ejecutar el servidor en una máquina accesible por HTTPS y el agente en los PC deseados. En ChatGPT algunas acciones de terminal/escritura pueden estar restringidas aunque el servidor anuncie las herramientas; esas restricciones son de ChatGPT y este proyecto no las elimina.
+**Requisito para integrar ChatGPT:** ejecuta el servidor en un endpoint HTTPS público y mantén los agentes activos en los ordenadores a los que quieras acceder. Las acciones de terminal y archivos dependen de los permisos de ChatGPT.
 
 ### Seguridad
 
@@ -387,7 +385,7 @@ Detalles de implementación: Linux/macOS usan una pseudo-terminal (PTY); Windows
 - `DORADO_ALLOWED_ROOTS` limita las rutas aceptadas por las herramientas de archivos, pero **no es un sandbox**: el shell puede alcanzar todo lo que permita tu usuario del sistema.
 - `write_file` no sobreescribe por defecto; `edit_file` exige coincidencia única. Los comandos tienen timeout, salida limitada y una concurrencia acotada.
 - Para revocar **todas** las sesiones OAuth puedes parar el servidor, hacer una copia de seguridad y borrar `data/dorado.sqlite3` (esto elimina los registros de clientes y tokens). Cambiar solamente la contraseña NO invalida tokens previamente emitidos.
-- Detener el agente corta el acceso a ese equipo. Volver a vincular el mismo nombre rota su token individual; `DORADO_AGENT_TOKEN` solamente existe como opción heredada y no debe configurarse en instalaciones nuevas.
+- Detener el agente corta el acceso a ese equipo. Al volver a vincularlo, se renueva su credencial.
 - El endpoint de registro OAuth es público para soportar clientes dinámicos; protégete de abuso externo mediante firewall, proxy y rate-limiting. Esta versión no proporciona gestión avanzada de usuarios, ni aislamiento entre propietarios, ni auditoría persistente.
 
 ### Desarrollo
