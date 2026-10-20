@@ -1,7 +1,6 @@
 <# Download a prebuilt Windows x64 binary from private GitHub Releases. #>
 param(
-  [ValidateSet('agent', 'server')][string]$Component = 'agent',
-  [switch]$NoSetup
+  [ValidateSet('agent', 'server')][string]$Component = 'agent'
 )
 $ErrorActionPreference = 'Stop'
 if ($Component -ne 'agent') { throw 'On Windows use the agent; deploy the server with Docker or on Linux.' }
@@ -42,8 +41,8 @@ try {
     Write-Host 'Added to the user PATH (new terminals will pick it up).'
   }
   $env:Path += ';' + $InstallDir
-  if (-not $NoSetup) { & $Dest --setup; if ($LASTEXITCODE -ne 0) { throw 'Agent setup failed' } }
-  Write-Host "Start the agent: remote-dorado-agent --auto-shell"
+  Write-Host 'Start the agent: remote-dorado-agent'
+  Write-Host 'On first run it will ask the PC/session name, relay URL and token, and save them locally.'
 }
 finally {
   Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
