@@ -27,7 +27,7 @@ from starlette.websockets import WebSocketDisconnect
 import uvicorn
 
 VERSION = "2025-06-18"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 PAIR_LIFETIME_SECONDS = 600
 PAIR_POLL_INTERVAL = 3
@@ -269,6 +269,13 @@ async def pairing_token(request: Request):
                      "ON CONFLICT(name) DO UPDATE SET token_hash=excluded.token_hash,created=excluded.created",
                      (row["device_name"], digest(token), now))
         conn.execute("DELETE FROM pairing_requests WHERE device_hash=?", (digest(device_code),))
+    # Credential rotation must revoke an ALREADY-OPEN old WebSocket too.
+    previous_connection = hub.devices.get(row["device_name"])
+    if previous_connection is not None:
+        try:
+            await previous_connection.socket.close(code=4401)
+        except RuntimeError:
+            pass
     return JSONResponse({"device_name": row["device_name"], "agent_token": token}, headers=pairing_headers())
 
 

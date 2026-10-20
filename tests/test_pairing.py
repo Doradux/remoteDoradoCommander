@@ -69,9 +69,14 @@ def test_repairing_rotates_previous_token(client):
     first = new_pair(client, "marcos")
     approve(client, first["user_code"])
     old = claim(client, first).json()["agent_token"]
-    next_ = new_pair(client, "marcos")
-    approve(client, next_["user_code"])
-    new = claim(client, next_).json()["agent_token"]
+    with client.websocket_connect("/agent/ws", headers={"Authorization": "Bearer " + old, "X-Device-Name": "marcos"}) as existing_ws:
+        next_ = new_pair(client, "marcos")
+        approve(client, next_["user_code"])
+        new = claim(client, next_).json()["agent_token"]
+        # A connection authenticated with the rotated token must be closed immediately.
+        from starlette.websockets import WebSocketDisconnect
+        with pytest.raises(WebSocketDisconnect):
+            existing_ws.receive_json()
     assert old != new
     with pytest.raises(Exception):
         with client.websocket_connect("/agent/ws", headers={"Authorization": "Bearer " + old, "X-Device-Name": "marcos"}) as ws:
