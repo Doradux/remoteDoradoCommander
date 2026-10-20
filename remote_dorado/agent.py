@@ -16,6 +16,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import websockets
 
+from .sessions import sessions
+
 MAX_OUTPUT = 250_000
 
 
@@ -34,6 +36,19 @@ def checked_path(value: str, *, must_exist: bool = False) -> Path:
 
 
 def dispatch(op: str, args: dict[str, Any]) -> dict[str, Any]:
+    if op == "list_active_sessions":
+        return sessions.list()
+    if op == "start_process":
+        cwd = checked_path(str(args.get("cwd", str(Path.home()))), must_exist=True)
+        return sessions.start(cwd, args.get("command"))
+    if op == "send_input_to_process":
+        return sessions.send(str(args["session_id"]), args["input"], args.get("append_newline", True), args.get("wait_ms", 200))
+    if op == "read_process_output":
+        return sessions.read(str(args["session_id"]), args.get("cursor"), args.get("max_bytes", 100_000))
+    if op == "terminate_session":
+        return sessions.terminate(str(args["session_id"]), force=args.get("force", False))
+    if op == "forget_session":
+        return sessions.forget(str(args["session_id"]))
     if op == "ping":
         return {"hostname": platform.node(), "platform": platform.system(), "time": time.time()}
     if op == "list_directory":
@@ -121,6 +136,7 @@ async def run_agent(url: str, token: str, name: str) -> None:
             async with websockets.connect(websocket_address(url), additional_headers={"Authorization": f"Bearer {token}", "X-Device-Name": name}, max_size=3_000_000, ping_interval=20, ping_timeout=20) as ws:
                 print(f"Device {name} connected", flush=True)
                 delay = 1
+                send_lock = asyncio.Lock()
                 async for msg in ws:
                     request = json.loads(msg)
                     if not isinstance(request, dict) or not isinstance(request.get("id"), str):
@@ -131,7 +147,8 @@ async def run_agent(url: str, token: str, name: str) -> None:
                             reply = {"id": item["id"], "result": result}
                         except Exception as exc:
                             reply = {"id": item["id"], "error": f"{type(exc).__name__}: {exc}"}
-                        await ws.send(json.dumps(reply))
+                        async with send_lock:
+                            await ws.send(json.dumps(reply))
                     asyncio.create_task(handle(request))
         except (OSError, websockets.exceptions.WebSocketException) as exc:
             print(f"Disconnected ({exc}); retrying in {delay}s", file=sys.stderr, flush=True)
@@ -142,10 +159,14 @@ async def run_agent(url: str, token: str, name: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Connect this machine to your private Dorado MCP server")
     parser.add_argument("--name", default=os.environ.get("DORADO_DEVICE_NAME", platform.node()))
+    parser.add_argument("--auto-shell", action="store_true", help="Start a persistent interactive shell at startup")
     args = parser.parse_args()
     url, token = os.environ.get("DORADO_PUBLIC_URL", ""), os.environ.get("DORADO_AGENT_TOKEN", "")
     if not url or len(token) < 32:
         parser.error("Set DORADO_PUBLIC_URL and a random DORADO_AGENT_TOKEN (32+ characters)")
+    if args.auto_shell or os.environ.get("DORADO_AUTO_SHELL", "0") == "1":
+        created = sessions.start(checked_path(str(Path.home()), must_exist=True))
+        print(f"Persistent shell ready: {created['session_id']} ({created['pid']})", flush=True)
     asyncio.run(run_agent(url, token, args.name))
 
 
