@@ -218,7 +218,7 @@ async def pairing_form(request: Request):
 <label>Código del equipo <input name='user_code' required maxlength='20' autocomplete='off' value='""" + candidate + """'></label>
 <p><label>Contraseña de administración del servidor <input type='password' name='password' required autocomplete='current-password'></label></p>
 <button type='submit'>Autorizar ordenador</button></form></body></html>"""
-    return HTMLResponse(page, headers={**pairing_headers(), "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"})
+    return HTMLResponse(page, headers={**pairing_headers(), "Content-Security-Policy": authorization_csp})
 
 
 @app.post("/pair/approve")
@@ -330,6 +330,23 @@ async def authorize(req: Request):
     login_request = secrets.token_urlsafe(32)
     with database() as conn:
         conn.execute("INSERT INTO authorization_requests VALUES (?,?,?,?,?,?,?)", (digest(login_request), cid, redirect, state, challenge, resource_url(), int(time.time()) + 300))
+    # Browsers such as Chromium apply form-action CSP to the entire form redirect
+    # chain. Include only the origin of the already-registered OAuth callback,
+    # otherwise the successful POST /oauth/approve -> 303 callback is blocked.
+    callback = urlsplit(redirect)
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", callback.hostname or ""):
+        return oauth_error("invalid_redirect_uri")
+    try:
+        callback_port = callback.port
+    except ValueError:
+        return oauth_error("invalid_redirect_uri")
+    callback_origin = f"{callback.scheme}://{callback.hostname}"
+    if callback_port is not None:
+        callback_origin += f":{callback_port}"
+    authorization_csp = (
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+        f"form-action 'self' {callback_origin}; frame-ancestors 'none'"
+    )
     page = """<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>Authorize Remote Dorado Commander</title><body style='font:16px system-ui;max-width:28rem;margin:5rem auto;padding:1rem'>
 <h1>Authorize access to your computers</h1><p>This MCP connection can run shell commands and modify files on every paired computer. Only approve an AI client you trust.</p>
