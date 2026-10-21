@@ -21,6 +21,19 @@ def test_agent_read_write_edit_run(tmp_path, monkeypatch):
     assert cmd["returncode"] == 0 and "dorado" in cmd["stdout"]
 
 
+def test_full_filesystem_wildcard_is_explicit(tmp_path, monkeypatch):
+    home = tmp_path / 'home'
+    home.mkdir()
+    outside = tmp_path / 'elsewhere' / 'file.txt'
+    monkeypatch.setenv('DORADO_ALLOWED_ROOTS', str(home))
+    with pytest.raises(PermissionError):
+        checked_path(str(outside))
+    monkeypatch.setenv('DORADO_ALLOWED_ROOTS', '*')
+    assert checked_path(str(outside)) == outside.resolve()
+    monkeypatch.setenv('DORADO_ALLOWED_ROOTS', '**')
+    with pytest.raises(PermissionError):
+        checked_path(str(outside))
+
 def test_root_escape_and_url(tmp_path, monkeypatch):
     monkeypatch.setenv("DORADO_ALLOWED_ROOTS", str(tmp_path))
     with pytest.raises(PermissionError):
