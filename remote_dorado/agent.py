@@ -28,15 +28,16 @@ DEVICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
 def allowed_roots() -> list[Path]:
-    raw = os.environ.get("DORADO_ALLOWED_ROOTS", str(Path.home()))
+    # Trusted devices allow all filesystem paths by default; an explicit value scopes access.
+    raw = os.environ.get("DORADO_ALLOWED_ROOTS", "*")
     return [Path(part).expanduser().resolve() for part in raw.split(os.pathsep) if part]
 
 
 def checked_path(value: str, *, must_exist: bool = False) -> Path:
     p = Path(value).expanduser().resolve()
-    # Only an explicit '*' opts this trusted agent into unrestricted filesystem paths.
-    # This does not bypass operating-system permissions.
-    if os.environ.get('DORADO_ALLOWED_ROOTS') != '*' and not any(p == root or root in p.parents for root in allowed_roots()):
+    # Full path access is the default for this owner-controlled agent.
+    # Explicit DORADO_ALLOWED_ROOTS values still limit paths; OS permissions always apply.
+    if os.environ.get('DORADO_ALLOWED_ROOTS', '*') != '*' and not any(p == root or root in p.parents for root in allowed_roots()):
         raise PermissionError("Path is outside DORADO_ALLOWED_ROOTS")
     if must_exist and not p.exists():
         raise FileNotFoundError(str(p))
