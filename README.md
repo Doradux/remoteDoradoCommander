@@ -44,6 +44,8 @@ Device paired! Future launches connect without prompting.
 
 **Commands:** `remote-dorado-agent` starts the agent and opens the pairing flow when needed. `remote-dorado-agent --setup` opens the configuration and pairing flow.
 
+**Full filesystem access (opt-in):** by default, file tools are scoped to the agent user's home directory. On a trusted computer, set `"allowed_roots": "*"` in the local `agent.json` and restart the agent to permit all filesystem paths; alternatively use `DORADO_ALLOWED_ROOTS=*` when launching the agent. This changes **only path validation in the agent**; operating-system permissions still apply. Do not enable it on untrusted machines or relays.
+
 > Security: only approve codes displayed by computers you control. MCP tools can execute commands and modify files with the agent user's privileges. Protect the relay with HTTPS, a strong password, and access controls.
 
 ### Quick installation (no repository clone or Python installation)
@@ -247,6 +249,8 @@ Introduce la contraseña de administración de tu relay y pulsa Autorizar.
 **Conectar ChatGPT:** añade el servidor MCP personalizado en ChatGPT usando `https://mcp.tudominio.es/mcp` y autoriza el acceso mediante OAuth. Los demás ordenadores vinculados al mismo servidor aparecen en `list_devices`. El programa local no utiliza las credenciales ni la sesión privada de ChatGPT: la autorización la gestiona tu propio servidor mediante OAuth. La disponibilidad de las herramientas depende de los permisos de ChatGPT.
 
 **Comandos:** `remote-dorado-agent` inicia el agente y abre la vinculación cuando hace falta. `remote-dorado-agent --setup` abre la configuración y el proceso de vinculación.
+
+**Acceso completo a archivos (opcional):** por defecto, las herramientas de archivos se limitan a la carpeta personal. En un equipo de confianza, establece `"allowed_roots": "*"` en el `agent.json` local y reinicia el agente para permitir cualquier ruta; también puedes usar `DORADO_ALLOWED_ROOTS=*` al iniciar el agente. Esto modifica **solo la validación de rutas del agente** y no evita los permisos del sistema operativo. No lo actives en equipos o servidores MCP que no controles.
 
 > Seguridad: autoriza solamente códigos que aparecen en un equipo tuyo. Las herramientas MCP pueden ejecutar comandos y modificar archivos con los privilegios de ese usuario. El relay debe usar HTTPS, contraseña fuerte y límites de acceso.
 
