@@ -21,7 +21,13 @@ def test_agent_read_write_edit_run(tmp_path, monkeypatch):
     assert cmd["returncode"] == 0 and "dorado" in cmd["stdout"]
 
 
-def test_full_filesystem_wildcard_is_explicit(tmp_path, monkeypatch):
+def test_unrestricted_filesystem_is_the_default(tmp_path, monkeypatch):
+    monkeypatch.delenv('DORADO_ALLOWED_ROOTS', raising=False)
+    outside = tmp_path / 'outside-home' / 'file.txt'
+    assert checked_path(str(outside)) == outside.resolve()
+    assert checked_path(str(tmp_path)) == tmp_path.resolve()
+
+def test_explicit_roots_override_full_access(tmp_path, monkeypatch):
     home = tmp_path / 'home'
     home.mkdir()
     outside = tmp_path / 'elsewhere' / 'file.txt'
