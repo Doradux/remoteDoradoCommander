@@ -44,7 +44,7 @@ Device paired! Future launches connect without prompting.
 
 **Commands:** `remote-dorado-agent` starts the agent and opens the pairing flow when needed. `remote-dorado-agent --setup` opens the configuration and pairing flow.
 
-**Full filesystem access (opt-in):** by default, file tools are scoped to the agent user's home directory. On a trusted computer, set `"allowed_roots": "*"` in the local `agent.json` and restart the agent to permit all filesystem paths; alternatively use `DORADO_ALLOWED_ROOTS=*` when launching the agent. This changes **only path validation in the agent**; operating-system permissions still apply. Do not enable it on untrusted machines or relays.
+**Filesystem access (default: all paths):** new installations allow the agent to work with any local filesystem path on all mounted drives, as permitted by the operating-system user account. No `allowed_roots` setting is needed. To restrict file tools and command working directories, set `"allowed_roots": "/your/allowed/path"` in the local `agent.json`, or set `DORADO_ALLOWED_ROOTS` to one or more OS-path-separated directories, then restart the agent. `"allowed_roots": "*"` explicitly restores full path access. This **does not grant administrator/root rights**; shell commands already run with the agent user's privileges. Run this only with a private, strongly authenticated relay and trusted MCP clients.
 
 > Security: only approve codes displayed by computers you control. MCP tools can execute commands and modify files with the agent user's privileges. Protect the relay with HTTPS, a strong password, and access controls.
 
@@ -133,14 +133,12 @@ Python **3.11+**; supports Linux, macOS, and Windows. The following is an altern
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-export DORADO_ALLOWED_ROOTS="$HOME"
 remote-dorado-agent
 ```
 
 On **PowerShell** (after installing with `py -m pip install -e .`):
 
 ```powershell
-$env:DORADO_ALLOWED_ROOTS=$HOME
 remote-dorado-agent
 ```
 
@@ -250,7 +248,7 @@ Introduce la contraseña de administración de tu relay y pulsa Autorizar.
 
 **Comandos:** `remote-dorado-agent` inicia el agente y abre la vinculación cuando hace falta. `remote-dorado-agent --setup` abre la configuración y el proceso de vinculación.
 
-**Acceso completo a archivos (opcional):** por defecto, las herramientas de archivos se limitan a la carpeta personal. En un equipo de confianza, establece `"allowed_roots": "*"` en el `agent.json` local y reinicia el agente para permitir cualquier ruta; también puedes usar `DORADO_ALLOWED_ROOTS=*` al iniciar el agente. Esto modifica **solo la validación de rutas del agente** y no evita los permisos del sistema operativo. No lo actives en equipos o servidores MCP que no controles.
+**Acceso a archivos (por defecto: todas las rutas):** las instalaciones nuevas permiten operar con cualquier ruta local y unidad montada que sea accesible para la cuenta del sistema operativo. No necesitas configurar `allowed_roots`. Para limitar las herramientas de archivos y los directorios de trabajo, define `"allowed_roots": "/ruta/permitida"` en el `agent.json` local, o establece `DORADO_ALLOWED_ROOTS` con rutas separadas según el sistema operativo, y reinicia el agente. `"allowed_roots": "*"` vuelve a permitir todas las rutas. Esto **no concede permisos de administrador/root**; la terminal sigue usando los privilegios del usuario. Úsalo solo con un relay privado y bien protegido y clientes MCP de confianza.
 
 > Seguridad: autoriza solamente códigos que aparecen en un equipo tuyo. Las herramientas MCP pueden ejecutar comandos y modificar archivos con los privilegios de ese usuario. El relay debe usar HTTPS, contraseña fuerte y límites de acceso.
 
@@ -339,14 +337,12 @@ Python **3.11+**; funciona con Linux, macOS y Windows. Método alternativo de de
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-export DORADO_ALLOWED_ROOTS="$HOME"
 remote-dorado-agent
 ```
 
 En **PowerShell** (instalación previa con `py -m pip install -e .`):
 
 ```powershell
-$env:DORADO_ALLOWED_ROOTS=$HOME
 remote-dorado-agent
 ```
 
