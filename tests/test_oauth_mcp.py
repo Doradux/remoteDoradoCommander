@@ -28,6 +28,10 @@ def start_oauth(client):
     cid = reg.json()["client_id"]
     authorize = client.get("/oauth/authorize", params={"response_type": "code", "client_id": cid, "redirect_uri": redirect, "state": "abc", "code_challenge": challenge, "code_challenge_method": "S256", "resource": "http://127.0.0.1:8765/mcp"})
     assert authorize.status_code == 200
+    csp = authorize.headers["content-security-policy"]
+    assert "form-action 'self' https://chatgpt.com;" in csp
+    assert "base-uri 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
     request_id = re.search(r"name='request_id' value='([^']+)'", authorize.text).group(1)
     approval = client.post("/oauth/approve", data={"request_id": request_id, "password": "secure-test-password-12345"}, follow_redirects=False)
     assert approval.status_code == 303
@@ -37,6 +41,25 @@ def start_oauth(client):
     assert params["state"] == ["abc"]
     assert params["iss"] == ["http://127.0.0.1:8765"]
     return cid, verifier, redirect, params["code"][0]
+
+
+def test_oauth_form_csp_scopes_callback_to_registered_origin(client):
+    """Chromium must follow the form POST 303 to the authorized OAuth callback."""
+    verifier = "x" * 64
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    redirect = "https://custom-client.example.net:8443/callback"
+    registered = client.post("/oauth/register", json={"redirect_uris": [redirect]})
+    assert registered.status_code == 201
+    response = client.get("/oauth/authorize", params={
+        "response_type": "code", "client_id": registered.json()["client_id"],
+        "redirect_uri": redirect, "state": "random_state",
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    })
+    assert response.status_code == 200
+    csp = response.headers["content-security-policy"]
+    assert "form-action 'self' https://custom-client.example.net:8443;" in csp
+    assert "https://chatgpt.com" not in csp
+    assert "script-src" not in csp
 
 
 def test_oauth_pkce_replay_refresh_and_mcp(client):
