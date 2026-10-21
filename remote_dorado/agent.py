@@ -34,7 +34,9 @@ def allowed_roots() -> list[Path]:
 
 def checked_path(value: str, *, must_exist: bool = False) -> Path:
     p = Path(value).expanduser().resolve()
-    if not any(p == root or root in p.parents for root in allowed_roots()):
+    # Only an explicit '*' opts this trusted agent into unrestricted filesystem paths.
+    # This does not bypass operating-system permissions.
+    if os.environ.get('DORADO_ALLOWED_ROOTS') != '*' and not any(p == root or root in p.parents for root in allowed_roots()):
         raise PermissionError("Path is outside DORADO_ALLOWED_ROOTS")
     if must_exist and not p.exists():
         raise FileNotFoundError(str(p))
