@@ -218,7 +218,7 @@ async def pairing_form(request: Request):
 <label>Código del equipo <input name='user_code' required maxlength='20' autocomplete='off' value='""" + candidate + """'></label>
 <p><label>Contraseña de administración del servidor <input type='password' name='password' required autocomplete='current-password'></label></p>
 <button type='submit'>Autorizar ordenador</button></form></body></html>"""
-    return HTMLResponse(page, headers={**pairing_headers(), "Content-Security-Policy": authorization_csp})
+    return HTMLResponse(page, headers={**pairing_headers(), "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"})
 
 
 @app.post("/pair/approve")
@@ -353,7 +353,7 @@ async def authorize(req: Request):
 <form action='/oauth/approve' method='post'><input type='hidden' name='request_id' value='""" + html.escape(login_request, quote=True) + """'>
 <label>Administrator password <input name='password' type='password' required autofocus autocomplete='current-password'></label>
 <button type='submit'>Approve access</button></form></body></html>"""
-    return HTMLResponse(page, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"})
+    return HTMLResponse(page, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Security-Policy": authorization_csp})
 
 
 @app.post("/oauth/approve")
