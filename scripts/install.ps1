@@ -4,8 +4,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if ($Component -ne 'agent') { throw 'On Windows use the agent; deploy the server with Docker or on Linux.' }
-if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) {
-  throw 'Windows x64 only (Windows ARM64 has no standalone build yet).'
+# PROCESSOR_ARCHITECTURE is available in Windows PowerShell 5.1 and PowerShell 7.
+# PROCESSOR_ARCHITEW6432 covers a 32-bit PowerShell process on 64-bit Windows.
+$CpuArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+if ($CpuArchitecture -ne 'AMD64') {
+  throw "Windows x64 is required for this build (detected: $CpuArchitecture)."
 }
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'Install GitHub CLI: https://cli.github.com/ and run gh auth login.' }
 & gh auth status 2>$null
@@ -42,7 +45,7 @@ try {
   }
   $env:Path += ';' + $InstallDir
   Write-Host 'Start the agent: remote-dorado-agent'
-  Write-Host 'On first run it will ask the PC/session name, relay URL and token, and save them locally.'
+  Write-Host 'On first run it will ask for the PC name and open browser pairing. A relay URL is only requested if no default is configured.'
 }
 finally {
   Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
