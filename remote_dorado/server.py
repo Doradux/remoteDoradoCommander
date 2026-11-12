@@ -130,7 +130,27 @@ def init_db() -> None:
         raise RuntimeError("Legacy shared DORADO_AGENT_TOKEN must be disabled in commercial mode")
     if os.environ.get("DORADO_AGENT_TOKEN") and len(os.environ["DORADO_AGENT_TOKEN"]) < 32:
         raise RuntimeError("Optional legacy DORADO_AGENT_TOKEN must be 32+ chars")
-    db_path().parent.mkdir(parents=True, exist_ok=True)
+    path = db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # SQLite contains OAuth token hashes, password hashes, device metadata
+    # and action records. Never create a world-readable database file.
+    if path.is_symlink():
+        raise RuntimeError("Refusing to open a symlinked relay database")
+    if os.name == "posix":
+        if not path.exists():
+            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            try:
+                fd = os.open(path, flags, 0o600)
+            except FileExistsError:
+                if path.is_symlink():
+                    raise RuntimeError("Refusing a symlinked relay database")
+            else:
+                os.close(fd)
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError("Relay database must be a regular file")
+        path.chmod(0o600)
     with database() as conn:
         conn.executescript("""
           CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, redirect_uris TEXT NOT NULL);
