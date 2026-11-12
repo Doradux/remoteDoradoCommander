@@ -50,7 +50,10 @@ def _frame(title: str, main: str) -> str:
     )
 
 
-def pairing_page(code: str, device_name: str | None = None) -> str:
+def pairing_page(
+    code: str, device_name: str | None = None, *,
+    logged_in: bool = False, csrf: str = "",
+) -> str:
     device = (
         f"<div class='kv'><small>Ordenador solicitante</small>"
         f"<strong>{escape(device_name)}</strong></div>"
@@ -64,9 +67,16 @@ def pairing_page(code: str, device_name: str | None = None) -> str:
         "<label for='user_code'>Código de vinculación</label>"
         f"<input id='user_code' name='user_code' required maxlength='20' "
         f"autocomplete='off' spellcheck='false' value='{escape(code, quote=True)}'>"
-        "<label for='password'>Contraseña de tu servidor</label>"
-        "<input id='password' type='password' name='password' required "
-        "autocomplete='current-password'>"
+        + (
+            f"<input type='hidden' name='csrf' value='{escape(csrf, quote=True)}'>"
+            "<div class='kv'><small>Autorización</small>"
+            "<strong>Tu sesión verificada</strong></div>"
+            if logged_in else
+            "<label for='password'>Contraseña de tu servidor</label>"
+            "<input id='password' type='password' name='password' required "
+            "autocomplete='current-password'>"
+        )
+        +
         "<div class='warning'>Al aprobarlo, un asistente autorizado podrá leer archivos "
         "y ejecutar comandos con los permisos de tu usuario del sistema.</div>"
         "<button type='submit'>Autorizar ordenador</button></form>"
@@ -74,7 +84,10 @@ def pairing_page(code: str, device_name: str | None = None) -> str:
     return _frame("Vincular ordenador", main)
 
 
-def authorization_page(request_id: str, callback_origin: str) -> str:
+def authorization_page(
+    request_id: str, callback_origin: str, *,
+    logged_in: bool = False, csrf: str = "",
+) -> str:
     main = (
         "<h1>Autorizar conexión MCP</h1>"
         "<p>Un asistente de IA solicita acceso remoto a tus ordenadores.</p>"
@@ -82,9 +95,16 @@ def authorization_page(request_id: str, callback_origin: str) -> str:
         f"<strong>{escape(callback_origin)}</strong></div>"
         "<form action='/oauth/approve' method='post'>"
         f"<input type='hidden' name='request_id' value='{escape(request_id, quote=True)}'>"
-        "<label for='password'>Contraseña del servidor</label>"
-        "<input id='password' name='password' type='password' required "
-        "autocomplete='current-password'>"
+        + (
+            f"<input type='hidden' name='csrf' value='{escape(csrf, quote=True)}'>"
+            "<div class='kv'><small>Autorización</small>"
+            "<strong>Tu sesión verificada</strong></div>"
+            if logged_in else
+            "<label for='password'>Contraseña del servidor</label>"
+            "<input id='password' name='password' type='password' required "
+            "autocomplete='current-password'>"
+        )
+        +
         "<div class='warning'>Este cliente podrá ejecutar comandos y modificar archivos "
         "en todos los equipos vinculados a este servidor. Autoriza solo si lo reconoces.</div>"
         "<button type='submit'>Conceder acceso</button></form>"

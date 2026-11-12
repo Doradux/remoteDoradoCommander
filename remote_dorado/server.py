@@ -27,6 +27,10 @@ from starlette.websockets import WebSocketDisconnect
 import uvicorn
 
 from .ui import pairing_page, authorization_page
+from .portal import (
+    init_portal_db, router as portal_router, owner_exists,
+    owner_session, csrf_ok, commercial_portal_enabled, login_redirect,
+)
 
 VERSION = "2025-06-18"
 APP_VERSION = "0.4.4"
@@ -134,7 +138,30 @@ def init_db() -> None:
             created INTEGER NOT NULL, origin TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0
           );
+          CREATE TABLE IF NOT EXISTS oauth_registration_events (
+            origin TEXT NOT NULL, created INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_oauth_registration_age ON oauth_registration_events(created);
+          CREATE TABLE IF NOT EXISTS action_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created INTEGER NOT NULL,
+            tool TEXT NOT NULL,
+            device TEXT NOT NULL,
+            status TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_audit_created ON action_audit(created);
         """)
+        init_portal_db(conn)
+
+
+def record_action_audit(tool: str, device: str, status: str) -> None:
+    """Metadata only: no command strings, tool arguments, output or credentials."""
+    with database() as conn:
+        conn.execute("INSERT INTO action_audit(created,tool,device,status) VALUES (?,?,?,?)",
+                     (int(time.time()), tool[:64], device[:64], status))
+        # Bound retention; no data about command contents is retained.
+        conn.execute("DELETE FROM action_audit WHERE created < ?",
+                     (int(time.time()) - 30 * 86400,))
 
 
 @dataclass
@@ -200,6 +227,16 @@ def normalize_user_code(code: str) -> str:
     return "".join(c for c in code.upper() if c in PAIR_ALPHABET)
 
 
+async def read_limited_json(request: Request, maximum: int) -> Any:
+    """Read JSON incrementally; reject excessive bodies before parsing."""
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > maximum:
+            raise OverflowError("request_too_large")
+        content.extend(chunk)
+    return json.loads(content)
+
+
 def pairing_headers() -> dict[str, str]:
     return {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
 
@@ -241,6 +278,14 @@ async def pairing_start(request: Request):
 
 @app.get("/pair")
 async def pairing_form(request: Request):
+    session = None
+    if commercial_portal_enabled():
+        if not owner_exists():
+            return Response("Portal owner not provisioned", status_code=503,
+                            headers=pairing_headers())
+        session = owner_session(request)
+        if not session:
+            return login_redirect(request.url.path + "?" + request.url.query)
     candidate = request.query_params.get("code", "")[:32]
     normalized = normalize_user_code(candidate)
     device = None
@@ -252,7 +297,9 @@ async def pairing_form(request: Request):
             ).fetchone()
             if row:
                 device = row["device_name"]
-    return HTMLResponse(pairing_page(candidate, device), headers={
+    return HTMLResponse(pairing_page(
+        candidate, device, logged_in=bool(session), csrf=session.csrf if session else "",
+    ), headers={
         **pairing_headers(),
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
                                    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
@@ -264,6 +311,9 @@ async def pairing_approve(request: Request):
     form = await request.form()
     user_code = normalize_user_code(str(form.get("user_code", "")))
     password = str(form.get("password", ""))
+    session = owner_session(request) if commercial_portal_enabled() else None
+    if commercial_portal_enabled() and not csrf_ok(session, str(form.get("csrf", ""))):
+        return oauth_error("access_denied", 403)
     if len(user_code) != 12:
         return oauth_error("invalid_user_code", 400)
     now = int(time.time())
@@ -272,7 +322,9 @@ async def pairing_approve(request: Request):
         row = conn.execute("SELECT * FROM pairing_requests WHERE user_hash=?", (digest(user_code),)).fetchone()
         if not row or row["expires"] <= now or row["status"] != "pending" or row["attempts"] >= 5:
             return oauth_error("expired_or_invalid_code", 403)
-        if not secrets.compare_digest(password, os.environ["DORADO_ADMIN_PASSWORD"]):
+        if not commercial_portal_enabled() and not secrets.compare_digest(
+            password, os.environ["DORADO_ADMIN_PASSWORD"]
+        ):
             conn.execute("UPDATE pairing_requests SET attempts=attempts+1 WHERE user_hash=?", (digest(user_code),))
             return oauth_error("access_denied", 403)
         conn.execute("UPDATE pairing_requests SET status='approved' WHERE user_hash=?", (digest(user_code),))
@@ -348,11 +400,18 @@ async def admin_revoke_device(request: Request):
     name = body.get("device_name") if isinstance(body, dict) else None
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
         return oauth_error("invalid_device_name")
+    if not await revoke_paired_device(name):
+        return oauth_error("device_not_found", 404)
+    return JSONResponse({"revoked": name}, headers=pairing_headers())
+
+
+async def revoke_paired_device(name: str) -> bool:
+    """Called by either owner portal or privileged operator REST API."""
     with database() as conn:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute("SELECT 1 FROM paired_devices WHERE name=?", (name,)).fetchone()
         if not existing:
-            return oauth_error("device_not_found", 404)
+            return False
         conn.execute("DELETE FROM paired_devices WHERE name=?", (name,))
         conn.execute("DELETE FROM known_devices WHERE name=?", (name,))
         conn.execute("DELETE FROM pairing_requests WHERE device_name=?", (name,))
@@ -362,7 +421,8 @@ async def admin_revoke_device(request: Request):
             await current.socket.close(code=4401)
         except RuntimeError:
             pass
-    return JSONResponse({"revoked": name}, headers=pairing_headers())
+    return True
+
 
 
 @app.get("/admin/oauth/clients")
@@ -394,16 +454,24 @@ async def admin_oauth_revoke_client(request: Request):
     client_id = body.get("client_id") if isinstance(body, dict) else None
     if not isinstance(client_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,128}", client_id):
         return oauth_error("invalid_client_id")
+    if not revoke_oauth_client(client_id):
+        return oauth_error("unknown_client", 404)
+    return JSONResponse({"revoked_client_id": client_id}, headers=pairing_headers())
+
+
+def revoke_oauth_client(client_id: str) -> bool:
+    """Revoke pending approvals plus every credential for one MCP OAuth client."""
     with database() as conn:
         conn.execute("BEGIN IMMEDIATE")
         found = conn.execute("SELECT 1 FROM clients WHERE id=?", (client_id,)).fetchone()
         if not found:
-            return oauth_error("unknown_client", 404)
+            return False
         conn.execute("DELETE FROM authorization_requests WHERE client_id=?", (client_id,))
         conn.execute("DELETE FROM codes WHERE client_id=?", (client_id,))
         conn.execute("DELETE FROM tokens WHERE client_id=?", (client_id,))
         conn.execute("DELETE FROM clients WHERE id=?", (client_id,))
-    return JSONResponse({"revoked_client_id": client_id}, headers=pairing_headers())
+    return True
+
 
 
 @app.get("/health")
@@ -425,16 +493,33 @@ async def authorization_metadata():
 @app.post("/oauth/register")
 async def register(req: Request):
     try:
-        data = await req.json()
+        data = await read_limited_json(req, 16_384)
         redirects = data["redirect_uris"]
-        if not isinstance(redirects, list) or not 1 <= len(redirects) <= 10 or any(not isinstance(u, str) or not check_redirect(u) for u in redirects):
+        if not isinstance(redirects, list) or not 1 <= len(redirects) <= 10 or any(
+            not isinstance(u, str) or len(u) > 2048 or not check_redirect(u)
+            for u in redirects
+        ):
             return oauth_error("invalid_redirect_uri")
         if data.get("token_endpoint_auth_method", "none") != "none":
             return oauth_error("invalid_client_metadata")
         client_id = secrets.token_urlsafe(32)
+        origin = req.client.host if req.client else "unknown"
+        now = int(time.time())
         with database() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM oauth_registration_events WHERE created < ?", (now - 600,))
+            per_origin = conn.execute(
+                "SELECT count(*) FROM oauth_registration_events WHERE origin=?", (origin,)
+            ).fetchone()[0]
+            total = conn.execute("SELECT count(*) FROM clients").fetchone()[0]
+            if per_origin >= 20 or total >= 100:
+                return oauth_error("registration_limit", 429)
+            conn.execute("INSERT INTO oauth_registration_events(origin,created) VALUES (?,?)",
+                         (origin, now))
             conn.execute("INSERT INTO clients VALUES (?,?)", (client_id, json.dumps(redirects)))
         return JSONResponse({"client_id": client_id, "client_id_issued_at": int(time.time()), "redirect_uris": redirects, "token_endpoint_auth_method": "none", "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"]}, status_code=201, headers={"Cache-Control": "no-store"})
+    except OverflowError:
+        return oauth_error("request_too_large", 413)
     except (ValueError, KeyError, TypeError):
         return oauth_error("invalid_client_metadata")
 
@@ -447,6 +532,14 @@ def client_allows(client_id: str, redirect_uri: str) -> bool:
 
 @app.get("/oauth/authorize")
 async def authorize(req: Request):
+    session = None
+    if commercial_portal_enabled():
+        if not owner_exists():
+            return Response("Portal owner not provisioned", status_code=503,
+                            headers=pairing_headers())
+        session = owner_session(req)
+        if not session:
+            return login_redirect(req.url.path + "?" + req.url.query)
     q = req.query_params
     cid, redirect = q.get("client_id", ""), q.get("redirect_uri", "")
     challenge, state = q.get("code_challenge", ""), q.get("state", "")
@@ -474,7 +567,10 @@ async def authorize(req: Request):
         "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
         f"form-action 'self' {callback_origin}; frame-ancestors 'none'"
     )
-    return HTMLResponse(authorization_page(login_request, callback_origin), headers={
+    return HTMLResponse(authorization_page(
+        login_request, callback_origin, logged_in=bool(session),
+        csrf=session.csrf if session else "",
+    ), headers={
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": authorization_csp,
@@ -485,13 +581,18 @@ async def authorize(req: Request):
 async def approve(req: Request):
     form = await req.form()
     request_id, password = str(form.get("request_id", "")), str(form.get("password", ""))
+    session = owner_session(req) if commercial_portal_enabled() else None
+    if commercial_portal_enabled() and not csrf_ok(session, str(form.get("csrf", ""))):
+        return oauth_error("access_denied", 403)
     # Consume the request even when password is incorrect; no replay of approval form.
     with database() as conn:
         row = conn.execute("SELECT * FROM authorization_requests WHERE id_hash=?", (digest(request_id),)).fetchone()
         conn.execute("DELETE FROM authorization_requests WHERE id_hash=?", (digest(request_id),))
     if not row or row["expires"] <= time.time():
         return oauth_error("invalid_request", 403)
-    if not secrets.compare_digest(password, os.environ["DORADO_ADMIN_PASSWORD"]):
+    if not commercial_portal_enabled() and not secrets.compare_digest(
+        password, os.environ["DORADO_ADMIN_PASSWORD"]
+    ):
         return oauth_error("access_denied", 403)
     code = secrets.token_urlsafe(40)
     with database() as conn:
@@ -564,7 +665,9 @@ async def mcp(req: Request):
     if not authenticated(req):
         return unauthorized()
     try:
-        body = await req.json()
+        body = await read_limited_json(req, 3_000_000)
+    except OverflowError:
+        return JSONResponse(rpc_error(None, -32600, "Request too large"), status_code=413)
     except ValueError:
         return JSONResponse(rpc_error(None, -32700, "Parse error"))
     if not isinstance(body, dict) or body.get("jsonrpc") != "2.0" or not isinstance(body.get("method"), str):
@@ -613,8 +716,10 @@ async def mcp(req: Request):
                 if not isinstance(device, str) or not device:
                     raise ValueError("device is required")
                 output = await hub.ask(device, name, {k: v for k, v in args.items() if k != "device"})
+            record_action_audit(name, str(args.get("device", "*")), "success")
             result = {"content": [{"type": "text", "text": json.dumps(output, ensure_ascii=False)}]}
         except (ValueError, RuntimeError, KeyError, TimeoutError) as exc:
+            record_action_audit(name, str(args.get("device", "*")), "error")
             result = {"content": [{"type": "text", "text": str(exc)}], "isError": True}
     else:
         return JSONResponse(rpc_error(id_, -32601, "Method not found"))
@@ -670,6 +775,10 @@ async def agent_socket(ws: WebSocket):
         for fut in device.pending.values():
             if not fut.done():
                 fut.set_exception(RuntimeError("Agent disconnected"))
+
+
+# Added after server routes so the portal can reuse the same revocation logic.
+app.include_router(portal_router)
 
 
 def main():
