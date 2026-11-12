@@ -27,6 +27,7 @@ Comprueba el dominio DNS y configura Caddy (o un proxy HTTPS equivalente) en la 
 ```bash
 mkdir -p data
 sudo chown 10001:10001 data
+sudo chmod 700 data
 docker compose up -d --build
 docker compose ps
 curl http://127.0.0.1:8765/health

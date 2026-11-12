@@ -102,6 +102,7 @@ def main() -> None:
     print(f"HTTPS reverse-proxy example: {files['proxy']}")
     print("NEXT: Configure public DNS and TLS reverse proxy, then use Docker Compose:")
     print("  mkdir -p data && sudo chown 10001:10001 data")
+    print("  sudo chmod 700 data")
     print("  docker compose up -d --build")
     print("  docker compose ps")
     print("  curl http://127.0.0.1:8765/health")

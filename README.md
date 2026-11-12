@@ -110,6 +110,7 @@ Put the printed **random administrator password** in `.env` in place of `REPLACE
 mkdir -p data
 # The Linux Docker image uses UID 10001 for database access:
 sudo chown 10001:10001 data
+sudo chmod 700 data
 docker compose up -d --build
 curl http://127.0.0.1:8765/health
 ```
@@ -316,6 +317,7 @@ Copia la **contraseña aleatoria** impresa a `.env` en lugar de `REPLACE_...`, y
 mkdir -p data
 # En Linux, la imagen Docker usa uid 10001 para la base de datos:
 sudo chown 10001:10001 data
+sudo chmod 700 data
 docker compose up -d --build
 curl http://127.0.0.1:8765/health
 ```

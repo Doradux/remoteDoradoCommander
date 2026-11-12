@@ -69,6 +69,7 @@ El asistente crea `.env` con contraseña fuerte no mostrada y `Caddyfile.dorado`
 ```bash
 mkdir -p data
 sudo chown 10001:10001 data
+sudo chmod 700 data
 docker compose up -d --build
 curl http://127.0.0.1:8765/health
 curl https://mcp.TU-DOMINIO.com/.well-known/oauth-authorization-server
