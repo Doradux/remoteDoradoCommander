@@ -27,7 +27,7 @@ def test_rc_workflow_only_creates_test_artifacts():
     workflow = (ROOT / ".github/workflows/rc-build.yml").read_text()
     assert "feature/commercial-hardening" in workflow
     assert "workflow_dispatch:" in workflow
-    assert "actions/upload-artifact@v4" in workflow
+    assert "actions/upload-artifact" not in workflow
     assert "actions/setup-node@v4" in workflow
     assert "macos-15-intel" in workflow
     assert "windows-2022" in workflow
