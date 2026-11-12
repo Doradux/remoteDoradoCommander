@@ -58,6 +58,10 @@
 
 7. Verify externally over HTTPS, validate OAuth discovery, test an unauthorized MCP call returns HTTP 401, and enroll only a test device with a disposable OS identity. Never attach a customer's device to the operator's personal relay.
 
+## Cuotas firmadas (piloto experimental)
+
+Puedes generar una instancia con `--signed-entitlements` si el operador dispone de `DORADO_ENTITLEMENT_MASTER_KEY` (64 caracteres hexadecimales aleatorios): esa instancia arranca con **0 plazas para nuevas vinculaciones** y solo acepta manifiestos firmados para ese cliente. Después de verificar un pago en Stripe, el operador puede exportar una nueva cuota y copiarla a `entitlements/current.json` (el directorio está montado en solo lectura dentro del contenedor, y los agentes ya emparejados no pierden acceso si caduca una cuota). Consulta [BILLING_CONTROL_PLANE.md](BILLING_CONTROL_PLANE.md). Esta fase **no automatiza cobros, Checkout ni renovaciones**.
+
 ## Portal del cliente y activación
 
 Después de arrancar el relay aislado, genera una invitación de un solo uso con `docker compose exec relay python -m remote_dorado.portal --invite`. El comprador recibirá el código por un canal privado y elegirá su contraseña en `https://SU-SUBDOMINIO/portal/activate`; luego administrará sus equipos en `/portal`. En modo comercial, la aprobación de vinculaciones y OAuth se autoriza desde su sesión, no con tu contraseña maestra. Consulta [CUSTOMER_PORTAL.md](CUSTOMER_PORTAL.md). Aún no hay registro libre, facturación ni soporte multiusuario en un mismo proceso.

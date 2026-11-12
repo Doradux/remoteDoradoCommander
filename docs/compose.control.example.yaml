@@ -1,0 +1,29 @@
+services:
+  control:
+    build:
+      context: ..
+      dockerfile: docs/Dockerfile.control
+    restart: unless-stopped
+    env_file:
+      - ../.env.control
+    environment:
+      DORADO_CONTROL_DB: /app/data/control.sqlite3
+      DORADO_CONTROL_BIND_HOST: 0.0.0.0
+      DORADO_CONTROL_PORT: 8790
+    ports:
+      - "127.0.0.1:8790:8790"
+    volumes:
+      - control_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 80
+    mem_limit: 256m
+    cpus: '0.50'
+
+volumes:
+  control_data:
