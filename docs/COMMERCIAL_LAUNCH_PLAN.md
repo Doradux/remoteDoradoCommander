@@ -5,7 +5,7 @@ Status: **NOT APPROVED FOR PUBLIC SALE OR SHARED HOSTING**. This is an engineeri
 ## Product separation
 
 - **Free self-hosted relay**: distribute the existing MIT source and build artifacts, while preserving copyright and attribution notices. An MIT licence permits third parties to redistribute previously released copies too; a future licence change cannot revoke that permission.
-- **Agensi skill**: sell a self-contained `SKILL.md` that teaches agent workflows using a relay the buyer already controls. Agensi does not run the MCP server, deliver executables, or install MCP clients. Agensi's current terms prohibit upselling external paid services from skill listings, packages, or sample outputs. Ask Agensi for explicit written guidance before using a paid hosted relay as a prerequisite.
+- **Agensi skill**: sell a self-contained `SKILL.md` teaching workflows with a relay the buyer already controls; it does not deliver executable hosting. **Agensi clarified by email on 12 Nov 2026** that listing links to our own repository, site and services are acceptable and that a free skill with an independently self-hosted free MCP relay is a normal model. Any paid skill must work as advertised **without buying an additional hosted plan**. Their submissions undergo automated security scanning and manual review; passing those reviews is still pending. No skill has been submitted or approved.
 - **Optional Dorado Relay Cloud**: independent subscription product with server hosting, onboarding, and device seats. Do not claim Agensi handles billing for it.
 
 ## IP and naming — blocking gate
@@ -70,7 +70,7 @@ https://stripe.com/es/billing/pricing
 ## Security and compliance — launch blockers
 
 - Full command execution is high-risk and not sandboxed. The current `DORADO_ALLOWED_ROOTS` only constrains some file-tool paths and command *starting directories*, NOT what arbitrary shell commands can access. Make safer per-device permissions/explicit root selection and read-only mode; independent OS account recommended.
-- Add per-agent concurrency limits and per-tenant rate limits; command argument size caps are not enough. Audit process kill, runaway subprocesses, memory and filesystem abuse.
+- New agent setups now offer **local `inspect` / `files` / `full` capabilities**, with `inspect` as recommended default; older installations without a saved profile remain `full` for compatibility. This is not an OS sandbox. Add per-agent concurrency limits and per-tenant rate limits; command argument size caps are not enough. Audit process kill, runaway subprocesses, memory and filesystem abuse.
 - Build device **revoke**, OAuth client/token revoke, account logout, expiring credentials and session management. Add 2FA/passkeys and login brute-force controls before shared service.
 - Add structured security audit events (without command output/secrets by default), minimal data retention, encrypted backups, disaster recovery and an abuse-response workflow.
 - Sign binaries and provide verified checksums. Distribute an install wizard and user-start service without embedding a residential IP, shared token or administrator password.
@@ -82,6 +82,9 @@ GDPR / EU tax starting points:
 - https://sede.agenciatributaria.gob.es/Sede/iva/iva-comercio-electronico/regimenes-especiales-ventanilla-unica.html
 
 ## What this branch actually implements
+
+- Free self-hosted setup generator (`scripts/setup_selfhost.py`) creates a private random relay password and Caddy example without external services; documented in [FREE_SELF_HOSTED_START.md](FREE_SELF_HOSTED_START.md).
+- Device-local permission profiles (`inspect`, `files`, `full`) with inspect recommended for newly paired devices; release workflow builds the Animate UI frontend for distributable server/wheel artifacts.
 
 - Optional **per-relay device cap** (`DORADO_MAX_DEVICES`; default 0 = no cap; commercial pilot set to 2).
 - Seat check at request and atomic credential exchange, so parallel claims cannot exceed the cap.
@@ -101,5 +104,5 @@ GDPR / EU tax starting points:
 - [ ] Load test with representative customers and benchmark resource usage.
 - [ ] Test account isolation, authorization bypass, incident recovery and backups.
 - [ ] Publish legal policies, support contact, refund/cancellation rules and clear product limitations.
-- [ ] Ask Agensi whether pairing its skill with a separately billed external hosted relay complies with its anti-upsell terms.
+- [x] Obtain Agensi guidance: on 12 Nov 2026 it confirmed optional links and independent free self-hosting are acceptable, provided the purchased skill functions without an additional paid managed plan. Still ensure listing claims match the deliverable.
 - [ ] Obtain explicit owner approval before deploying to production, uploading to Agensi, buying infrastructure or collecting payments.

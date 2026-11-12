@@ -30,3 +30,11 @@ Antes de confirmar código:
 7. No iniciar `npm run dev` automáticamente ni cambiar el relay personal de producción.
 
 El enlace al catálogo debe revisarse al incorporar cada componente nuevo; Animate UI evoluciona y los nombres y props pueden cambiar.
+
+## Instalación gratuita y seguridad del agente
+
+- La versión pública debe instalarse y utilizarse sin contratar Cloud ni comprar la skill. Mantener `docs/FREE_SELF_HOSTED_START.md` y `scripts/setup_selfhost.py` funcionales sin servidores de Dorado.
+- No pedir que se peguen contraseñas o tokens del relay en el chat, ni convertir un servicio de pago en requisito de una skill.
+- Los perfiles `inspect`, `files` y `full` se aplican en el agente local, nunca por parámetros MCP. Las instalaciones nuevas proponen `inspect`; las antiguas conservan sus permisos salvo cambio expreso.
+- `DORADO_ALLOWED_ROOTS` no es un sandbox de comandos shell.
+- Los releases del servidor y el wheel deben compilar e incluir el frontend Animate UI y `remote_dorado/static/.vite/manifest.json`.

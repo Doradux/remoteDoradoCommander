@@ -1,5 +1,7 @@
 # Remote Dorado Commander
 
+**Comenzar gratis:** [Guía de autoalojamiento (español)](docs/FREE_SELF_HOSTED_START.md). No requiere Cloud ni comprar la skill.
+
 > **Commercial hardening in progress.** The customer-facing product name being evaluated is **Dorado Relay**. This repository is currently a single-customer self-hosted MCP relay, **not** a tenant-isolated paid SaaS. Do not use one relay for unrelated paying customers. The experimental [customer portal](docs/CUSTOMER_PORTAL.md) includes invitation-only account activation, login, devices and MCP access management. **All web screens now use an Animate UI / React frontend** (no custom Python HTML/CSS templates); every future web view must follow the [complete Animate UI component catalog and rules](docs/ANIMATE_UI_CATALOG.md). The private pilot [billing control plane](docs/BILLING_CONTROL_PLANE.md) now has simulated, verified Stripe webhook reconciliation and signed per-customer seat manifests; it does **not** provide Checkout, automatic payments, entitlement distribution or public SaaS. See [commercial launch plan](docs/COMMERCIAL_LAUNCH_PLAN.md). The draft paid Agensi skill is deliberately stored **outside this public repository**, not distributed here. No billing or hosted service has been launched.
 
 [**English**](#english) · [**Español**](#español)
@@ -44,7 +46,7 @@ Device paired! Future launches connect without prompting.
 
 **Connect ChatGPT:** add a custom MCP server in ChatGPT using `https://mcp.yourdomain.com/mcp` and authorize it using OAuth. Computers paired with the same relay appear in `list_devices`. The local agent does not access your private ChatGPT credentials or login session: your relay handles authorization with OAuth. Available actions depend on ChatGPT account and workspace permissions.
 
-**Commands:** `remote-dorado-agent` starts the agent and opens the pairing flow when needed. `remote-dorado-agent --setup` opens the configuration and pairing flow.
+**Commands:** `remote-dorado-agent` starts the agent and opens the pairing flow when needed. `remote-dorado-agent --setup` opens the configuration and pairing flow. Newly linked devices explicitly choose `inspect` (recommended; read-only), `files` (file modifications but no shell), or `full` (shell and process access). Existing installations without a saved permission keep full access for compatibility. A local `--permission files` or `--permission full` overrides the profile for one run; `--read-only` always forces inspection. MCP clients cannot elevate device permissions.
 
 **Filesystem access (default: all paths):** new installations allow the agent to work with any local filesystem path on all mounted drives, as permitted by the operating-system user account. No `allowed_roots` setting is needed. To restrict file tools and command working directories, set `"allowed_roots": "/your/allowed/path"` in the local `agent.json`, or set `DORADO_ALLOWED_ROOTS` to one or more OS-path-separated directories, then restart the agent. `"allowed_roots": "*"` explicitly restores full path access. This **does not grant administrator/root rights**; shell commands already run with the agent user's privileges. Run this only with a private, strongly authenticated relay and trusted MCP clients.
 
@@ -88,6 +90,8 @@ pipx install /tmp/dorado-wheel/*.whl
 Private GitHub Releases provide executable installation without downloading the source repository or requiring Python on the target PC. GitHub Actions build minutes may be billed depending on your plan.
 
 ### Deploying the relay (Linux + Docker)
+
+**Free guided setup:** after cloning, run `python3 scripts/setup_selfhost.py --domain mcp.yourdomain.com` to generate a private `.env` with a random admin password and an example `Caddyfile.dorado`. Nothing is started or overwritten. [Full guide](docs/FREE_SELF_HOSTED_START.md).
 
 **Requirements**: a VPS or other server reachable by ChatGPT over HTTPS, Docker and Docker Compose, a domain, and a TLS reverse proxy such as Caddy, nginx, or a suitable secure tunnel.
 
@@ -209,6 +213,8 @@ This is an **independent implementation licensed under MIT**. The repository `de
 ---
 
 ## Español
+
+**Instalación gratuita más sencilla:** ejecuta `python3 scripts/setup_selfhost.py --domain mcp.tudominio.com` tras clonar el repositorio. Genera `.env` privado y configuración Caddy sin iniciar nada. Los equipos nuevos recomiendan el permiso `inspect`, y puedes ampliar a `files` o `full` desde el asistente local. [Instrucciones completas](docs/FREE_SELF_HOSTED_START.md).
 
 Un MCP remoto **autoalojado**, creado de forma independiente, para usar tus propios equipos desde clientes MCP remotos (incluido ChatGPT, cuando tu cuenta tenga habilitadas las acciones necesarias). **Sin cuotas de llamadas ni suscripción del proveedor original**: tú alojas el relay y el agente. Siguen existiendo los límites de tu infraestructura y de cada cliente/plataforma de IA.
 
