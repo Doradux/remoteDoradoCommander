@@ -26,20 +26,31 @@ def validate_url(url: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage paired devices on one isolated Dorado relay")
-    parser.add_argument("action", choices=("list", "revoke"))
-    parser.add_argument("device_name", nargs="?")
+    parser.add_argument("action", choices=("list", "revoke", "oauth-list", "oauth-revoke"))
+    parser.add_argument("target", nargs="?", help="Device name or OAuth client ID for revocation")
     parser.add_argument("--relay", default=os.environ.get("DORADO_PUBLIC_URL", ""))
     args = parser.parse_args()
-    if args.action == "revoke" and not args.device_name:
-        parser.error("revoke requires a device name")
+    if args.action in ("revoke", "oauth-revoke") and not args.target:
+        parser.error(f"{args.action} requires a device name or OAuth client ID")
     if not args.relay:
         parser.error("Supply --relay https://your-relay.example or DORADO_PUBLIC_URL")
     url = validate_url(args.relay)
     password = getpass("Relay administrator password: ")
     if not password:
         parser.error("Empty password")
-    endpoint = "/admin/devices" if args.action == "list" else "/admin/devices/revoke"
-    payload = json.dumps({"device_name": args.device_name}).encode() if args.action == "revoke" else None
+    endpoints = {
+        "list": "/admin/devices",
+        "revoke": "/admin/devices/revoke",
+        "oauth-list": "/admin/oauth/clients",
+        "oauth-revoke": "/admin/oauth/clients/revoke",
+    }
+    endpoint = endpoints[args.action]
+    if args.action == "revoke":
+        payload = json.dumps({"device_name": args.target}).encode()
+    elif args.action == "oauth-revoke":
+        payload = json.dumps({"client_id": args.target}).encode()
+    else:
+        payload = None
     request = Request(url + endpoint, data=payload, method="POST" if payload else "GET", headers={
         "Authorization": "Bearer " + password,
         "Accept": "application/json",

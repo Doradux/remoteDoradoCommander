@@ -45,6 +45,8 @@ Keep the home relay and its secrets **private**. Never pair paying customers to 
 
 ### Phase 1: isolated pilot per paying customer
 
+A configuration generator and operator runbook are now available in [PILOT_DEPLOYMENT.md](PILOT_DEPLOYMENT.md). The generator only stages isolated configuration; it does not deploy to a VPS or integrate billing. The operator can now also revoke all credentials issued to an MCP OAuth client through protected admin endpoints.
+
 On EU VPS, use Docker Compose / Caddy with one non-root relay container per paying customer, unique subdomain, private SQLite database volume, separate administrator password and agent credentials. Configure `DORADO_MAX_DEVICES=2` initially (per *relay*, not per user in a shared instance), `DORADO_COMMERCIAL_MODE=1`, and disable `DORADO_AGENT_TOKEN`. Use isolation/resource quotas, default-deny cross-container access and automatic backups.
 
 **Do not** place two customers in one existing Dorado relay. Current database, OAuth access tokens, hub map and approval password have no tenant IDs. Changing the device number alone does not make a multiuser app.

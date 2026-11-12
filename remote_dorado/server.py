@@ -365,6 +365,47 @@ async def admin_revoke_device(request: Request):
     return JSONResponse({"revoked": name}, headers=pairing_headers())
 
 
+@app.get("/admin/oauth/clients")
+async def admin_oauth_clients(request: Request):
+    """List OAuth client registrations without exposing token or code hashes."""
+    if not admin_authenticated(request):
+        return oauth_error("access_denied", 403)
+    with database() as conn:
+        records = conn.execute(
+            "SELECT id, redirect_uris FROM clients ORDER BY id"
+        ).fetchall()
+    return JSONResponse({
+        "clients": [
+            {"client_id": row["id"], "redirect_uris": json.loads(row["redirect_uris"])}
+            for row in records
+        ]
+    }, headers=pairing_headers())
+
+
+@app.post("/admin/oauth/clients/revoke")
+async def admin_oauth_revoke_client(request: Request):
+    """Invalidate all credentials associated with one MCP client immediately."""
+    if not admin_authenticated(request):
+        return oauth_error("access_denied", 403)
+    try:
+        body = await request.json()
+    except ValueError:
+        return oauth_error("invalid_request")
+    client_id = body.get("client_id") if isinstance(body, dict) else None
+    if not isinstance(client_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,128}", client_id):
+        return oauth_error("invalid_client_id")
+    with database() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        found = conn.execute("SELECT 1 FROM clients WHERE id=?", (client_id,)).fetchone()
+        if not found:
+            return oauth_error("unknown_client", 404)
+        conn.execute("DELETE FROM authorization_requests WHERE client_id=?", (client_id,))
+        conn.execute("DELETE FROM codes WHERE client_id=?", (client_id,))
+        conn.execute("DELETE FROM tokens WHERE client_id=?", (client_id,))
+        conn.execute("DELETE FROM clients WHERE id=?", (client_id,))
+    return JSONResponse({"revoked_client_id": client_id}, headers=pairing_headers())
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "online_devices": len(hub.devices)}
