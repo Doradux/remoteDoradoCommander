@@ -58,6 +58,10 @@
 
 7. Verify externally over HTTPS, validate OAuth discovery, test an unauthorized MCP call returns HTTP 401, and enroll only a test device with a disposable OS identity. Never attach a customer's device to the operator's personal relay.
 
+## Portal del cliente y activación
+
+Después de arrancar el relay aislado, genera una invitación de un solo uso con `docker compose exec relay python -m remote_dorado.portal --invite`. El comprador recibirá el código por un canal privado y elegirá su contraseña en `https://SU-SUBDOMINIO/portal/activate`; luego administrará sus equipos en `/portal`. En modo comercial, la aprobación de vinculaciones y OAuth se autoriza desde su sesión, no con tu contraseña maestra. Consulta [CUSTOMER_PORTAL.md](CUSTOMER_PORTAL.md). Aún no hay registro libre, facturación ni soporte multiusuario en un mismo proceso.
+
 ## Operator-only administration
 
 All admin APIs require the **specific tenant's administrator password**, read securely from that tenant's secret store; do not log it, put it in URLs or pass it in command-line arguments.

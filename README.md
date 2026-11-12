@@ -1,6 +1,6 @@
 # Remote Dorado Commander
 
-> **Commercial hardening in progress.** The customer-facing product name being evaluated is **Dorado Relay**. This repository is currently a single-customer self-hosted MCP relay, **not** a tenant-isolated paid SaaS. Do not use one relay for unrelated paying customers. See [commercial launch plan](docs/COMMERCIAL_LAUNCH_PLAN.md). The draft paid Agensi skill is deliberately stored **outside this public repository**, not distributed here. No billing or hosted service has been launched.
+> **Commercial hardening in progress.** The customer-facing product name being evaluated is **Dorado Relay**. This repository is currently a single-customer self-hosted MCP relay, **not** a tenant-isolated paid SaaS. Do not use one relay for unrelated paying customers. The experimental [customer portal](docs/CUSTOMER_PORTAL.md) includes invitation-only account activation, login, devices and MCP access management. See [commercial launch plan](docs/COMMERCIAL_LAUNCH_PLAN.md). The draft paid Agensi skill is deliberately stored **outside this public repository**, not distributed here. No billing or hosted service has been launched.
 
 [**English**](#english) · [**Español**](#español)
 
