@@ -11,7 +11,6 @@ from pathlib import Path
 import platform
 import re
 import tempfile
-import subprocess
 import sys
 import time
 import webbrowser
@@ -21,6 +20,8 @@ from urllib.parse import urlsplit, urlunsplit
 import websockets
 
 from .sessions import sessions
+from .agent_transport import serve_agent_requests
+from .execution import run_bounded_command
 from .build_config import DEFAULT_RELAY_URL
 
 MAX_OUTPUT = 250_000
@@ -151,16 +152,10 @@ def dispatch(op: str, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
         if not command.strip() or len(command) > 8_000:
             raise ValueError("Empty or oversized command")
-        timeout = min(max(int(args.get("timeout_seconds", 30)), 1), 120)
-        # Intentional arbitrary shell access. Only authorize trusted MCP clients.
-        try:
-            completed = subprocess.run(command, shell=True, cwd=str(cwd), capture_output=True, timeout=timeout)
-            return {"returncode": completed.returncode,
-                    "stdout": completed.stdout[:MAX_OUTPUT].decode("utf-8", errors="replace"),
-                    "stderr": completed.stderr[:MAX_OUTPUT].decode("utf-8", errors="replace"),
-                    "truncated": len(completed.stdout) > MAX_OUTPUT or len(completed.stderr) > MAX_OUTPUT}
-        except subprocess.TimeoutExpired as exc:
-            return {"returncode": None, "timeout": True, "stdout": (exc.stdout or b"")[:MAX_OUTPUT].decode("utf-8", errors="replace"), "stderr": (exc.stderr or b"")[:MAX_OUTPUT].decode("utf-8", errors="replace")}
+        timeout = int(args.get("timeout_seconds", 30))
+        # Shell execution remains powerful, but output and subprocess lifetime
+        # are bounded. Use start_process for intentional long-running jobs.
+        return run_bounded_command(command, cwd, timeout_seconds=timeout, max_output=MAX_OUTPUT)
     raise ValueError("Unsupported operation")
 
 
@@ -180,20 +175,7 @@ async def run_agent(url: str, token: str, name: str) -> None:
             async with websockets.connect(websocket_address(url), additional_headers={"Authorization": f"Bearer {token}", "X-Device-Name": name}, max_size=3_000_000, ping_interval=20, ping_timeout=20) as ws:
                 print(f"Device {name} connected", flush=True)
                 delay = 1
-                send_lock = asyncio.Lock()
-                async for msg in ws:
-                    request = json.loads(msg)
-                    if not isinstance(request, dict) or not isinstance(request.get("id"), str):
-                        continue
-                    async def handle(item: dict[str, Any]) -> None:
-                        try:
-                            result = await asyncio.to_thread(dispatch, str(item["op"]), item.get("args", {}))
-                            reply = {"id": item["id"], "result": result}
-                        except Exception as exc:
-                            reply = {"id": item["id"], "error": f"{type(exc).__name__}: {exc}"}
-                        async with send_lock:
-                            await ws.send(json.dumps(reply))
-                    asyncio.create_task(handle(request))
+                await serve_agent_requests(ws, dispatch)
         except (OSError, websockets.exceptions.WebSocketException) as exc:
             print(f"Disconnected ({exc}); retrying in {delay}s", file=sys.stderr, flush=True)
         await asyncio.sleep(delay)
@@ -349,8 +331,8 @@ def interactive_setup(*, force_pair: bool = False) -> None:
               "permission": chosen_permission}
     # On explicit reconfiguration, rotate credentials by completing a new pairing.
     if force_pair or len(old_token) < 32:
-        config.pop("agent_token", None)
-        save_agent_config(config)
+        # Keep the old saved credential until the replacement has actually
+        # been authorized; a timeout or aborted pairing must not brick the PC.
         new_token = pair_with_relay(url, name)
         config["agent_token"] = new_token
     else:

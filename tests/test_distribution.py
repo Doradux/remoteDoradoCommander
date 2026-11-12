@@ -102,3 +102,29 @@ def test_install_script_with_private_release_fixture(tmp_path):
     assert installed.is_file()
     result = subprocess.run([str(installed)], text=True, capture_output=True)
     assert result.stdout.strip() == 'remote-dorado-agent-test'
+
+
+def test_failed_repair_does_not_destroy_previous_device_credentials(tmp_path, monkeypatch):
+    from remote_dorado.agent import interactive_setup
+    import pytest
+    config = tmp_path / "agent.json"
+    monkeypatch.setenv("DORADO_CONFIG_FILE", str(config))
+    monkeypatch.delenv("DORADO_PUBLIC_URL", raising=False)
+    old = {
+        "public_url": "https://relay.example.org",
+        "device_name": "pc-old",
+        "agent_token": "old-token" * 7,
+        "permission": "inspect",
+        "auto_shell": False,
+    }
+    save_agent_config(old)
+    before = config.read_bytes()
+    monkeypatch.setattr("remote_dorado.agent.ask_device_name", lambda default: "pc-old")
+    monkeypatch.setattr("remote_dorado.agent.ask_permission", lambda default: "files")
+    def fail(*args, **kwargs):
+        raise TimeoutError("pairing expired")
+    monkeypatch.setattr("remote_dorado.agent.pair_with_relay", fail)
+    with pytest.raises(TimeoutError):
+        interactive_setup(force_pair=True)
+    assert config.read_bytes() == before
+    assert read_agent_config() == old
