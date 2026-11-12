@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /src
 COPY pyproject.toml ./
+COPY README.md ./README.md
 COPY remote_dorado/ ./remote_dorado/
 COPY scripts/ ./scripts/
 COPY frontend/package.json ./frontend/package.json

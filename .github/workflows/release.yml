@@ -45,6 +45,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend --no-audit --no-fund
+      - run: npm run test:ssr --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: git diff --exit-code -- remote_dorado/static
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -69,6 +78,18 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: matrix.platform == 'linux-x64'
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend --no-audit --no-fund
+        if: matrix.platform == 'linux-x64'
+      - run: npm run build --prefix frontend
+        if: matrix.platform == 'linux-x64'
+      - run: git diff --exit-code -- remote_dorado/static
+        if: matrix.platform == 'linux-x64'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -84,7 +105,7 @@ jobs:
         run: python scripts/package_release.py --platform ${{ matrix.platform }} --component agent
       - name: Build Linux relay server
         if: matrix.platform == 'linux-x64'
-        run: python -m PyInstaller --noconfirm --clean --onefile --name remote-dorado-server --collect-all uvicorn --collect-all fastapi --collect-all starlette --collect-all pydantic --collect-all multipart --collect-all websockets --collect-all anyio scripts/server_entry.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --name remote-dorado-server --collect-all uvicorn --collect-all fastapi --collect-all starlette --collect-all pydantic --collect-all multipart --collect-all websockets --collect-all anyio --collect-data remote_dorado scripts/server_entry.py
       - name: Package Linux relay server
         if: matrix.platform == 'linux-x64'
         run: python scripts/package_release.py --platform linux-x64 --component server
@@ -99,6 +120,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend --no-audit --no-fund
+      - run: npm run build --prefix frontend
+      - run: git diff --exit-code -- remote_dorado/static
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
