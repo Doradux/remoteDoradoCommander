@@ -44,22 +44,42 @@ def checked_path(value: str, *, must_exist: bool = False) -> Path:
     return p
 
 
-MUTATING_OPERATIONS = {
-    "write_file", "edit_file", "execute_command", "start_process",
-    "send_input_to_process", "terminate_session",
+# Local-only capability gate. The MCP caller and relay cannot choose or
+# elevate the agent's permission profile. This is NOT an OS sandbox.
+PERMISSION_PROFILES = ("inspect", "files", "full")
+FILE_OPERATIONS = {"write_file", "edit_file"}
+SHELL_OPERATIONS = {
+    "execute_command", "start_process", "send_input_to_process",
+    "terminate_session", "forget_session",
 }
+MUTATING_OPERATIONS = FILE_OPERATIONS | SHELL_OPERATIONS
+
+
+def permission_profile() -> str:
+    """Legacy installations remain full; newly paired devices save inspect."""
+    if os.environ.get("DORADO_READ_ONLY", "0").strip() == "1":
+        return "inspect"
+    value = os.environ.get("DORADO_AGENT_PERMISSION", "full").strip().lower()
+    if value not in PERMISSION_PROFILES:
+        raise ValueError("Invalid local agent permission; use inspect, files or full")
+    return value
 
 
 def read_only_mode() -> bool:
-    return os.environ.get("DORADO_READ_ONLY", "0").strip() == "1"
+    return permission_profile() == "inspect"
+
+
+def check_permission(op: str) -> None:
+    profile = permission_profile()
+    if profile == "inspect" and op in MUTATING_OPERATIONS:
+        raise PermissionError("This device is in read-only inspection mode")
+    if profile == "files" and op in SHELL_OPERATIONS:
+        raise PermissionError("This device forbids remote shell and process control (files profile)")
 
 
 def dispatch(op: str, args: dict[str, Any]) -> dict[str, Any]:
-    # Defense in depth for people who choose inspection-only access.
-    # Not a sandbox: a different program running as the same OS user can
-    # still modify files. Full mode should use a restricted OS identity.
-    if read_only_mode() and op in MUTATING_OPERATIONS:
-        raise PermissionError("This device is in read-only inspection mode")
+    # Enforce locally, before any operation side effects.
+    check_permission(op)
     if op == "list_active_sessions":
         return sessions.list()
     if op == "start_process":
@@ -292,6 +312,24 @@ def pair_with_relay(url: str, name: str, *, open_browser: bool = True) -> str:
     raise TimeoutError("Pairing expired. Start the agent again for a fresh code.")
 
 
+def ask_permission(default: str = "inspect") -> str:
+    """Explicit local consent for powerful capabilities at setup."""
+    if default not in PERMISSION_PROFILES:
+        default = "inspect"
+    print("Remote access permissions for this device:")
+    print("  1. Inspect: list and read files; no changes (recommended)")
+    print("  2. Files: inspect and edit files; no remote shell")
+    print("  3. Full: file changes, shell commands and persistent processes")
+    choices = {"": default, "1": "inspect", "2": "files", "3": "full"}
+    while True:
+        answer = input(f"Choose 1/2/3 [default: {default}]: ").strip()
+        if answer in choices:
+            selected = choices[answer]
+            print(f"Selected local permission: {selected}")
+            return selected
+        print("Enter 1, 2 or 3. The relay cannot change this setting remotely.")
+
+
 def interactive_setup(*, force_pair: bool = False) -> None:
     """First-run wizard: alias + browser approval, no agent token requested."""
     old = read_agent_config()
@@ -304,8 +342,11 @@ def interactive_setup(*, force_pair: bool = False) -> None:
         url = input("Your relay URL (one-time setup): ").strip().rstrip("/")
     validate_relay_url(url)
     old_token = old.get("agent_token", "") if old.get("device_name") == name and old.get("public_url") == url else ""
+    # New pairing defaults to inspection-only. Existing devices retain their profile.
+    chosen_permission = ask_permission(old.get("permission", "inspect"))
     config = {**old, "device_name": name, "public_url": url,
-              "auto_shell": old.get("auto_shell", False)}
+              "auto_shell": old.get("auto_shell", False),
+              "permission": chosen_permission}
     # On explicit reconfiguration, rotate credentials by completing a new pairing.
     if force_pair or len(old_token) < 32:
         config.pop("agent_token", None)
@@ -337,14 +378,18 @@ def resolve_startup_config(parser: argparse.ArgumentParser, cli_name: str | None
             if not name and url and len(token) >= 32:
                 print("Welcome to Remote Dorado Commander! Choose a name for this computer.")
                 name = ask_device_name()
-                config = {**config, "device_name": name, "auto_shell": config.get("auto_shell", False)}
+                chosen_permission = ask_permission(config.get("permission", "inspect"))
+                config = {**config, "device_name": name, "auto_shell": config.get("auto_shell", False),
+                          "permission": chosen_permission}
                 save_agent_config(config)  # Explicit env secrets are NOT persisted.
             elif name and url and len(token) < 32:
                 validate_relay_url(url)
                 print(f"Connecting {name} to your private relay. Approve the pairing in your browser.")
+                chosen_permission = ask_permission(config.get("permission", "inspect"))
                 token = pair_with_relay(url, name)
                 config = {**config, "device_name": name, "public_url": url,
-                          "agent_token": token, "auto_shell": config.get("auto_shell", False)}
+                          "agent_token": token, "auto_shell": config.get("auto_shell", False),
+                          "permission": chosen_permission}
                 save_agent_config(config)
             else:
                 interactive_setup()
@@ -359,6 +404,8 @@ def resolve_startup_config(parser: argparse.ArgumentParser, cli_name: str | None
     if not url or len(token) < 32:
         parser.error("Device not linked: complete browser pairing first")
     validate_relay_url(url)
+    if "permission" in config and config["permission"] not in PERMISSION_PROFILES:
+        parser.error("Invalid saved agent permission: use --setup to select a valid profile")
     return url, token, name, config
 
 
@@ -367,8 +414,11 @@ def main() -> None:
     parser.add_argument("--name", default=None, help="Optional override for the saved PC name")
     parser.add_argument("--auto-shell", action="store_true", help="Start a persistent interactive shell at startup")
     parser.add_argument("--setup", action="store_true", help="Rename/re-link this computer via a browser")
-    parser.add_argument("--read-only", action="store_true", help="Allow remote inspection but no file edits or shell commands")
+    parser.add_argument("--read-only", action="store_true", help="Force inspection-only (overrides saved profile)")
+    parser.add_argument("--permission", choices=PERMISSION_PROFILES, help="Override device permissions for this run only")
     args = parser.parse_args()
+    if args.permission:
+        os.environ["DORADO_AGENT_PERMISSION"] = args.permission
     if args.read_only:
         os.environ["DORADO_READ_ONLY"] = "1"
     if args.setup:
@@ -378,9 +428,19 @@ def main() -> None:
             parser.error(f"Pairing failed: {exc}")
         return
     url, token, name, config = resolve_startup_config(parser, args.name)
+    if not args.permission and "DORADO_AGENT_PERMISSION" not in os.environ:
+        os.environ["DORADO_AGENT_PERMISSION"] = config.get("permission", "full")
+    profile = permission_profile()
+    print(f"Device permission: {profile} (set on this computer)", flush=True)
     if not os.environ.get("DORADO_ALLOWED_ROOTS") and config.get("allowed_roots"):
         os.environ["DORADO_ALLOWED_ROOTS"] = str(config["allowed_roots"])
-    if args.auto_shell or os.environ.get("DORADO_AUTO_SHELL", "0") == "1" or config.get("auto_shell", False):
+    auto_shell = (
+        args.auto_shell or os.environ.get("DORADO_AUTO_SHELL", "0") == "1"
+        or config.get("auto_shell", False)
+    )
+    if auto_shell and profile != "full":
+        parser.error("Auto-shell requires full local permission; use --setup or --permission full")
+    if auto_shell:
         created = sessions.start(checked_path(str(Path.home()), must_exist=True))
         print(f"Persistent shell ready: {created['session_id']} ({created['pid']})", flush=True)
     asyncio.run(run_agent(url, token, name))

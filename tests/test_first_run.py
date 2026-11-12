@@ -14,11 +14,12 @@ def test_first_launch_asks_only_name_when_credentials_exist(tmp_path, monkeypatc
     monkeypatch.setenv("DORADO_AGENT_TOKEN", "a" * 48)
     monkeypatch.delenv("DORADO_DEVICE_NAME", raising=False)
     monkeypatch.setattr("remote_dorado.agent.is_interactive_terminal", lambda: True)
-    answers = iter(["office_pc"])
+    answers = iter(["office_pc", ""])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     parser = argparse.ArgumentParser()
     assert resolve_startup_config(parser, None)[:3] == ("https://mcp.example.com", "a" * 48, "office_pc")
     assert read_agent_config()["device_name"] == "office_pc"
+    assert read_agent_config()["permission"] == "inspect"
     assert read_agent_config()["auto_shell"] is False  # new installs do not open shell until requested
     assert "a" * 48 not in config_path.read_text()  # env secrets never persisted implicitly
     assert "Choose a name" in capsys.readouterr().out
@@ -35,7 +36,7 @@ def test_first_launch_full_wizard_name_is_first(tmp_path, monkeypatch):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr("remote_dorado.agent.is_interactive_terminal", lambda: True)
     questions = []
-    answers = iter(["my-desktop", "https://mcp.example.com"])
+    answers = iter(["my-desktop", "https://mcp.example.com", ""])
     def answer(prompt):
         questions.append(prompt)
         return next(answers)
@@ -49,6 +50,7 @@ def test_first_launch_full_wizard_name_is_first(tmp_path, monkeypatch):
     assert questions[1].startswith("Your relay URL")
     assert read_agent_config()["device_name"] == name
     assert config["auto_shell"] is False  # user can opt in later
+    assert config["permission"] == "inspect"
 
 
 def test_invalid_device_name_reprompts_with_safe_default(monkeypatch):

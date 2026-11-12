@@ -27,7 +27,7 @@ def test_config_saved_privately_and_overrides(tmp_path, monkeypatch):
 
 def test_interactive_config_does_not_echo_token(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv('DORADO_CONFIG_FILE', str(tmp_path / 'agent.json'))
-    answers = iter(['my-pc', 'https://mcp.example.com'])
+    answers = iter(['my-pc', 'https://mcp.example.com', ''])
     monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
     monkeypatch.setattr('remote_dorado.agent.pair_with_relay', lambda url, name: 'secret'*8)
     interactive_setup()
