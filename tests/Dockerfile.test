@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+WORKDIR /src
+COPY pyproject.toml ./
+COPY remote_dorado/ ./remote_dorado/
+COPY scripts/ ./scripts/
+COPY .github/workflows/release.yml ./.github/workflows/release.yml
+COPY tests/ ./tests/
+RUN pip install --no-cache-dir -e '.[test]'
+CMD ["pytest", "-q"]

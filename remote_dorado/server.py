@@ -26,6 +26,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from starlette.websockets import WebSocketDisconnect
 import uvicorn
 
+from .ui import pairing_page, authorization_page
+
 VERSION = "2025-06-18"
 APP_VERSION = "0.4.4"
 PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -67,6 +69,30 @@ def db_path() -> Path:
     return Path(os.environ.get("DORADO_DB", "./data/dorado.sqlite3"))
 
 
+def max_devices() -> int:
+    """Per-relay seat cap. Zero means unrestricted (self-hosted compatibility).
+
+    This is NOT a multi-tenant plan entitlement: one commercial relay must be
+    provisioned per customer until proper tenant isolation exists.
+    """
+    raw = os.environ.get("DORADO_MAX_DEVICES", "0")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("DORADO_MAX_DEVICES must be a non-negative integer") from exc
+    if value < 0:
+        raise RuntimeError("DORADO_MAX_DEVICES must be a non-negative integer")
+    return value
+
+
+def admin_authenticated(req: Request) -> bool:
+    """Password never goes in URLs; must be used only behind HTTPS."""
+    bearer = req.headers.get("authorization", "")
+    expected = os.environ.get("DORADO_ADMIN_PASSWORD", "")
+    return bool(expected and bearer.startswith("Bearer ") and
+                secrets.compare_digest(bearer[7:], expected))
+
+
 @contextmanager
 def database():
     connection = sqlite3.connect(db_path(), timeout=10)
@@ -86,6 +112,9 @@ def init_db() -> None:
         raise RuntimeError("Use public HTTPS for DORADO_PUBLIC_URL; HTTP is allowed only on loopback for local tests")
     if len(os.environ["DORADO_ADMIN_PASSWORD"]) < 16:
         raise RuntimeError("DORADO_ADMIN_PASSWORD must be 16+ chars")
+    max_devices()  # Fail fast on invalid subscription/device configuration.
+    if os.environ.get("DORADO_COMMERCIAL_MODE") == "1" and os.environ.get("DORADO_AGENT_TOKEN"):
+        raise RuntimeError("Legacy shared DORADO_AGENT_TOKEN must be disabled in commercial mode")
     if os.environ.get("DORADO_AGENT_TOKEN") and len(os.environ["DORADO_AGENT_TOKEN"]) < 32:
         raise RuntimeError("Optional legacy DORADO_AGENT_TOKEN must be 32+ chars")
     db_path().parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +218,11 @@ async def pairing_start(request: Request):
     origin = request.client.host if request.client else "unknown"
     with database() as conn:
         conn.execute("DELETE FROM pairing_requests WHERE expires < ?", (now,))
+        limit = max_devices()
+        if limit and not conn.execute("SELECT 1 FROM paired_devices WHERE name=?", (name,)).fetchone():
+            if conn.execute("SELECT count(*) FROM paired_devices").fetchone()[0] >= limit:
+                return JSONResponse({"error": "device_limit_reached", "device_limit": limit},
+                                    status_code=403, headers=pairing_headers())
         # Rate-limit unauthenticated issuance (do not trust spoofable forwarded headers).
         count = conn.execute("SELECT count(*) FROM pairing_requests WHERE origin=? AND created > ?", (origin, now - 600)).fetchone()[0]
         if count >= 30:
@@ -207,18 +241,22 @@ async def pairing_start(request: Request):
 
 @app.get("/pair")
 async def pairing_form(request: Request):
-    candidate = html.escape(request.query_params.get("code", "")[:32], quote=True)
-    page = """<!doctype html><html lang='es'><meta charset='utf-8'>
-<meta name='viewport' content='width=device-width, initial-scale=1'>
-<title>Vincular PC | Dorado Commander</title>
-<body style='font:16px system-ui;max-width:34rem;margin:4rem auto;padding:1rem'>
-<h1>Vincular un ordenador</h1>
-<p>Aprueba solo códigos que veas en TU equipo. Autorizar concede acceso a archivos y terminal mediante el MCP.</p>
-<form action='/pair/approve' method='post'>
-<label>Código del equipo <input name='user_code' required maxlength='20' autocomplete='off' value='""" + candidate + """'></label>
-<p><label>Contraseña de administración del servidor <input type='password' name='password' required autocomplete='current-password'></label></p>
-<button type='submit'>Autorizar ordenador</button></form></body></html>"""
-    return HTMLResponse(page, headers={**pairing_headers(), "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"})
+    candidate = request.query_params.get("code", "")[:32]
+    normalized = normalize_user_code(candidate)
+    device = None
+    if len(normalized) == 12:
+        with database() as conn:
+            row = conn.execute(
+                "SELECT device_name FROM pairing_requests WHERE user_hash=? AND expires>?",
+                (digest(normalized), int(time.time())),
+            ).fetchone()
+            if row:
+                device = row["device_name"]
+    return HTMLResponse(pairing_page(candidate, device), headers={
+        **pairing_headers(),
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+                                   "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    })
 
 
 @app.post("/pair/approve")
@@ -263,6 +301,12 @@ async def pairing_token(request: Request):
             return oauth_error("authorization_pending", 400)
         if row["status"] != "approved":
             return oauth_error("access_denied", 400)
+        # Re-check under BEGIN IMMEDIATE: concurrent pairings cannot bypass seat limits.
+        limit = max_devices()
+        if limit and not conn.execute("SELECT 1 FROM paired_devices WHERE name=?", (row["device_name"],)).fetchone():
+            if conn.execute("SELECT count(*) FROM paired_devices").fetchone()[0] >= limit:
+                return JSONResponse({"error": "device_limit_reached", "device_limit": limit},
+                                    status_code=403, headers=pairing_headers())
         # One-time exchange. Explicit approval on this relay rotates any older device credential.
         token = secrets.token_urlsafe(48)
         conn.execute("INSERT INTO paired_devices(name,token_hash,created) VALUES (?,?,?) "
@@ -277,6 +321,48 @@ async def pairing_token(request: Request):
         except RuntimeError:
             pass
     return JSONResponse({"device_name": row["device_name"], "agent_token": token}, headers=pairing_headers())
+
+
+@app.get("/admin/devices")
+async def admin_devices(request: Request):
+    """Single-customer relay administration, not a multi-tenant dashboard."""
+    if not admin_authenticated(request):
+        return oauth_error("access_denied", 403)
+    with database() as conn:
+        rows = conn.execute("SELECT name, created FROM paired_devices ORDER BY name").fetchall()
+    return JSONResponse({"devices": [
+        {"name": row["name"], "created": row["created"], "online": row["name"] in hub.devices}
+        for row in rows
+    ], "count": len(rows), "max_devices": max_devices()}, headers=pairing_headers())
+
+
+@app.post("/admin/devices/revoke")
+async def admin_revoke_device(request: Request):
+    """Revoke a seat and invalidate an already-open agent WebSocket."""
+    if not admin_authenticated(request):
+        return oauth_error("access_denied", 403)
+    try:
+        body = await request.json()
+    except ValueError:
+        return oauth_error("invalid_request")
+    name = body.get("device_name") if isinstance(body, dict) else None
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+        return oauth_error("invalid_device_name")
+    with database() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute("SELECT 1 FROM paired_devices WHERE name=?", (name,)).fetchone()
+        if not existing:
+            return oauth_error("device_not_found", 404)
+        conn.execute("DELETE FROM paired_devices WHERE name=?", (name,))
+        conn.execute("DELETE FROM known_devices WHERE name=?", (name,))
+        conn.execute("DELETE FROM pairing_requests WHERE device_name=?", (name,))
+    current = hub.devices.get(name)
+    if current is not None:
+        try:
+            await current.socket.close(code=4401)
+        except RuntimeError:
+            pass
+    return JSONResponse({"revoked": name}, headers=pairing_headers())
 
 
 @app.get("/health")
@@ -347,13 +433,11 @@ async def authorize(req: Request):
         "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
         f"form-action 'self' {callback_origin}; frame-ancestors 'none'"
     )
-    page = """<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
-<title>Authorize Remote Dorado Commander</title><body style='font:16px system-ui;max-width:28rem;margin:5rem auto;padding:1rem'>
-<h1>Authorize access to your computers</h1><p>This MCP connection can run shell commands and modify files on every paired computer. Only approve an AI client you trust.</p>
-<form action='/oauth/approve' method='post'><input type='hidden' name='request_id' value='""" + html.escape(login_request, quote=True) + """'>
-<label>Administrator password <input name='password' type='password' required autofocus autocomplete='current-password'></label>
-<button type='submit'>Approve access</button></form></body></html>"""
-    return HTMLResponse(page, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Security-Policy": authorization_csp})
+    return HTMLResponse(authorization_page(login_request, callback_origin), headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": authorization_csp,
+    })
 
 
 @app.post("/oauth/approve")
@@ -513,7 +597,8 @@ async def agent_socket(ws: WebSocket):
         row = conn.execute("SELECT token_hash FROM paired_devices WHERE name=?", (name,)).fetchone()
     valid_pair = bool(row and token and secrets.compare_digest(row["token_hash"], digest(token)))
     legacy = os.environ.get("DORADO_AGENT_TOKEN", "")
-    valid_legacy = bool(legacy and secrets.compare_digest(token, legacy))
+    valid_legacy = bool(os.environ.get("DORADO_COMMERCIAL_MODE") != "1" and
+                        legacy and secrets.compare_digest(token, legacy))
     if not (valid_pair or valid_legacy):
         await ws.close(code=4401)
         return

@@ -19,7 +19,7 @@ def test_first_launch_asks_only_name_when_credentials_exist(tmp_path, monkeypatc
     parser = argparse.ArgumentParser()
     assert resolve_startup_config(parser, None)[:3] == ("https://mcp.example.com", "a" * 48, "office_pc")
     assert read_agent_config()["device_name"] == "office_pc"
-    assert read_agent_config()["auto_shell"] is True
+    assert read_agent_config()["auto_shell"] is False  # new installs do not open shell until requested
     assert "a" * 48 not in config_path.read_text()  # env secrets never persisted implicitly
     assert "Choose a name" in capsys.readouterr().out
 
@@ -48,7 +48,7 @@ def test_first_launch_full_wizard_name_is_first(tmp_path, monkeypatch):
     assert questions[0].startswith("Name for this PC/session")
     assert questions[1].startswith("Your relay URL")
     assert read_agent_config()["device_name"] == name
-    assert config["auto_shell"] is True
+    assert config["auto_shell"] is False  # user can opt in later
 
 
 def test_invalid_device_name_reprompts_with_safe_default(monkeypatch):

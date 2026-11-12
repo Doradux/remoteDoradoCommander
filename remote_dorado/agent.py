@@ -44,7 +44,22 @@ def checked_path(value: str, *, must_exist: bool = False) -> Path:
     return p
 
 
+MUTATING_OPERATIONS = {
+    "write_file", "edit_file", "execute_command", "start_process",
+    "send_input_to_process", "terminate_session",
+}
+
+
+def read_only_mode() -> bool:
+    return os.environ.get("DORADO_READ_ONLY", "0").strip() == "1"
+
+
 def dispatch(op: str, args: dict[str, Any]) -> dict[str, Any]:
+    # Defense in depth for people who choose inspection-only access.
+    # Not a sandbox: a different program running as the same OS user can
+    # still modify files. Full mode should use a restricted OS identity.
+    if read_only_mode() and op in MUTATING_OPERATIONS:
+        raise PermissionError("This device is in read-only inspection mode")
     if op == "list_active_sessions":
         return sessions.list()
     if op == "start_process":
@@ -290,7 +305,7 @@ def interactive_setup(*, force_pair: bool = False) -> None:
     validate_relay_url(url)
     old_token = old.get("agent_token", "") if old.get("device_name") == name and old.get("public_url") == url else ""
     config = {**old, "device_name": name, "public_url": url,
-              "auto_shell": old.get("auto_shell", True)}
+              "auto_shell": old.get("auto_shell", False)}
     # On explicit reconfiguration, rotate credentials by completing a new pairing.
     if force_pair or len(old_token) < 32:
         config.pop("agent_token", None)
@@ -322,14 +337,14 @@ def resolve_startup_config(parser: argparse.ArgumentParser, cli_name: str | None
             if not name and url and len(token) >= 32:
                 print("Welcome to Remote Dorado Commander! Choose a name for this computer.")
                 name = ask_device_name()
-                config = {**config, "device_name": name, "auto_shell": config.get("auto_shell", True)}
+                config = {**config, "device_name": name, "auto_shell": config.get("auto_shell", False)}
                 save_agent_config(config)  # Explicit env secrets are NOT persisted.
             elif name and url and len(token) < 32:
                 validate_relay_url(url)
                 print(f"Connecting {name} to your private relay. Approve the pairing in your browser.")
                 token = pair_with_relay(url, name)
                 config = {**config, "device_name": name, "public_url": url,
-                          "agent_token": token, "auto_shell": config.get("auto_shell", True)}
+                          "agent_token": token, "auto_shell": config.get("auto_shell", False)}
                 save_agent_config(config)
             else:
                 interactive_setup()
@@ -352,7 +367,10 @@ def main() -> None:
     parser.add_argument("--name", default=None, help="Optional override for the saved PC name")
     parser.add_argument("--auto-shell", action="store_true", help="Start a persistent interactive shell at startup")
     parser.add_argument("--setup", action="store_true", help="Rename/re-link this computer via a browser")
+    parser.add_argument("--read-only", action="store_true", help="Allow remote inspection but no file edits or shell commands")
     args = parser.parse_args()
+    if args.read_only:
+        os.environ["DORADO_READ_ONLY"] = "1"
     if args.setup:
         try:
             interactive_setup(force_pair=True)
