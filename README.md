@@ -1,5 +1,7 @@
 # Remote Dorado Commander
 
+> **Commercial hardening in progress.** The customer-facing product name being evaluated is **Dorado Relay**. This repository is currently a single-customer self-hosted MCP relay, **not** a tenant-isolated paid SaaS. Do not use one relay for unrelated paying customers. See [commercial launch plan](docs/COMMERCIAL_LAUNCH_PLAN.md). The draft paid Agensi skill is deliberately stored **outside this public repository**, not distributed here. No billing or hosted service has been launched.
+
 [**English**](#english) · [**Español**](#español)
 
 ## English
@@ -50,28 +52,28 @@ Device paired! Future launches connect without prompting.
 
 ### Quick installation (no repository clone or Python installation)
 
-**Recommended: private, prebuilt downloads from GitHub Releases.** Releases include standalone agents for Linux x64, Windows x64, macOS Intel, and macOS Apple Silicon; a standalone Linux x64 server; a Python wheel; and SHA256 checksums. GitHub Actions builds packages automatically when a version change in `pyproject.toml` is pushed to `main`. See [Releases](https://github.com/Doradux/remoteDoradoCommander/releases).
+**Recommended: verified prebuilt downloads from public GitHub Releases.** Releases include standalone agents for Linux x64, Windows x64, macOS Intel, and macOS Apple Silicon; a standalone Linux x64 server; a Python wheel; and SHA256 checksums. GitHub Actions builds packages automatically when a version change in `pyproject.toml` is pushed to `main`. See [Releases](https://github.com/Doradux/remoteDoradoCommander/releases).
 
-Because **the repository is private**, install [GitHub CLI](https://cli.github.com/) and sign in to an account with access using `gh auth login` (once per computer). **Never** include credentials in shell commands or make the repository public just to avoid authentication.
+The repository and Releases are public, so installation does not require a GitHub account. Verify the official release and its SHA256 checksum.
 
 **Linux / macOS** (Bash; automatic architecture detection and SHA256 verification; setup occurs when the agent is first launched):
 
 ```bash
-bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) agent
+bash <(curl -fsSL https://raw.githubusercontent.com/Doradux/remoteDoradoCommander/main/scripts/install.sh) agent
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-& ([scriptblock]::Create((gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.ps1 | Out-String)))
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Doradux/remoteDoradoCommander/main/scripts/install.ps1).Content))
 ```
 
-After installing, run `remote-dorado-agent`. Enter a **device name** (the hostname is suggested) and authorize the **pairing code** in your browser. If the build has no preset relay address, enter its URL. The agent stores its configuration locally and starts a persistent shell by default. Run `remote-dorado-agent --setup` to change the device settings. **A deployed HTTPS relay is required.**
+After installing, run `remote-dorado-agent`. Enter a **device name** (the hostname is suggested) and authorize the **pairing code** in your browser. If the build has no preset relay address, enter its URL. The agent stores its configuration locally and does not automatically start a persistent shell on new installations. Inspection-only mode is available through the --read-only flag. Run `remote-dorado-agent --setup` to change the device settings. **A deployed HTTPS relay is required.**
 
 To install the **Linux x64 server** as a standalone executable (Docker Compose is preferable for a VPS):
 
 ```bash
-bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) server
+bash <(curl -fsSL https://raw.githubusercontent.com/Doradux/remoteDoradoCommander/main/scripts/install.sh) server
 ```
 
 For **non-interactive installations**, pair each device interactively, then run the agent as a service. Use `DORADO_INSTALL_DIR` to select the Unix installation directory. Rerun the installer to download the latest Release. Builds are **architecture-specific** and do not bundle secrets.
@@ -127,7 +129,7 @@ curl -i https://mcp.YOUR-DOMAIN.com/mcp
 
 ### Install an agent on your own computer
 
-Python **3.11+**; supports Linux, macOS, and Windows. The following is an alternative **development installation** that requires checking out the private repository; use the quick installation above to avoid that.
+Python **3.11+**; supports Linux, macOS, and Windows. The following is an alternative **development installation** that requires checking out the repository; use the quick installation above to avoid that.
 
 ```bash
 python3 -m venv .venv
@@ -254,28 +256,28 @@ Introduce la contraseña de administración de tu relay y pulsa Autorizar.
 
 ### Instalación rápida (sin clonar el repo ni instalar Python)
 
-**Recomendado: descargas binarias privadas desde GitHub Releases.** La Release contiene un agente autónomo para Linux x64, Windows x64, macOS Intel y macOS Apple Silicon; y un servidor autónomo para Linux x64. También se publica un wheel Python y sumas SHA256. La compilación la realiza GitHub Actions automáticamente cuando se sube a `main` una versión nueva en `pyproject.toml`. Puedes consultar los paquetes en [Releases](https://github.com/Doradux/remoteDoradoCommander/releases).
+**Recomendado: descargas binarias verificadas desde GitHub Releases público.** La Release contiene un agente autónomo para Linux x64, Windows x64, macOS Intel y macOS Apple Silicon; y un servidor autónomo para Linux x64. También se publica un wheel Python y sumas SHA256. La compilación la realiza GitHub Actions automáticamente cuando se sube a `main` una versión nueva en `pyproject.toml`. Puedes consultar los paquetes en [Releases](https://github.com/Doradux/remoteDoradoCommander/releases).
 
-Dado que **el repositorio es privado**, instala [GitHub CLI](https://cli.github.com/) y autoriza la cuenta que tiene acceso con `gh auth login` (una vez por ordenador). **No** expongas credenciales en comandos ni publiques el repositorio para evitar la autenticación.
+El repositorio y las Releases son públicos: para instalar no necesitas iniciar sesión en GitHub. Verifica las sumas SHA256 de los paquetes.
 
 **Linux / macOS** (Bash; detecta arquitectura automáticamente; verifica SHA256; el asistente de configuración aparece en el primer arranque del agente):
 
 ```bash
-bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) agent
+bash <(curl -fsSL https://raw.githubusercontent.com/Doradux/remoteDoradoCommander/main/scripts/install.sh) agent
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-& ([scriptblock]::Create((gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.ps1 | Out-String)))
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Doradux/remoteDoradoCommander/main/scripts/install.ps1).Content))
 ```
 
-Tras instalarlo, ejecuta `remote-dorado-agent`. Introduce un **nombre de equipo** (se propone el hostname) y autoriza el **código de vinculación** en el navegador. Si el ejecutable no tiene una dirección preconfigurada, introduce la URL del servidor. El agente guarda su configuración localmente y abre una shell persistente por defecto. Usa `remote-dorado-agent --setup` para cambiar la configuración. **Es necesario tener el servidor HTTPS desplegado.**
+Tras instalarlo, ejecuta `remote-dorado-agent`. Introduce un **nombre de equipo** (se propone el hostname) y autoriza el **código de vinculación** en el navegador. Si el ejecutable no tiene una dirección preconfigurada, introduce la URL del servidor. El agente guarda su configuración local y no inicia una shell persistente automáticamente en nuevas instalaciones. Para modo de solo inspección puedes usar la opción --read-only. Usa `remote-dorado-agent --setup` para cambiar la configuración. **Es necesario tener el servidor HTTPS desplegado.**
 
 Instalar el **servidor Linux x64** como binario (aunque en un VPS es preferible el Docker Compose de más abajo):
 
 ```bash
-bash <(gh api -H 'Accept: application/vnd.github.raw' repos/Doradux/remoteDoradoCommander/contents/scripts/install.sh) server
+bash <(curl -fsSL https://raw.githubusercontent.com/Doradux/remoteDoradoCommander/main/scripts/install.sh) server
 ```
 
 Para instalaciones **no interactivas**, vincula cada equipo de forma interactiva y después ejecuta el agente como servicio. Usa `DORADO_INSTALL_DIR` para elegir el directorio de instalación en Unix. Repite el instalador para descargar la última versión. Las compilaciones son **específicas de cada arquitectura** y no incluyen secretos.
@@ -287,7 +289,7 @@ gh release download --repo Doradux/remoteDoradoCommander -p '*.whl' -D /tmp/dora
 pipx install /tmp/dorado-wheel/*.whl
 ```
 
-Las Releases privadas de GitHub permiten instalar ejecutables sin descargar el código fuente ni necesitar Python en el PC. GitHub Actions puede consumir minutos de compilación facturables según tu plan.
+Las Releases públicas de GitHub permiten instalar ejecutables sin descargar el código fuente ni necesitar Python en el PC. GitHub Actions puede consumir minutos de compilación facturables según tu plan.
 
 ### Preparar el servidor (Linux + Docker)
 
@@ -331,7 +333,7 @@ curl -i https://mcp.TU-DOMINIO.com/mcp
 
 ### Instalar el agente en un equipo propio
 
-Python **3.11+**; funciona con Linux, macOS y Windows. Método alternativo de desarrollo (requiere descargar el repositorio privado; para evitarlo usa la instalación rápida anterior):
+Python **3.11+**; funciona con Linux, macOS y Windows. Método alternativo de desarrollo (requiere descargar el repositorio; para evitarlo usa la instalación rápida anterior):
 
 ```bash
 python3 -m venv .venv

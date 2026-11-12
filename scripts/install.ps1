@@ -1,4 +1,4 @@
-<# Download a prebuilt Windows x64 binary from private GitHub Releases. #>
+<# Download a prebuilt Windows x64 binary from official GitHub Releases. #>
 param(
   [ValidateSet('agent', 'server')][string]$Component = 'agent'
 )
@@ -10,17 +10,26 @@ $CpuArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW643
 if ($CpuArchitecture -ne 'AMD64') {
   throw "Windows x64 is required for this build (detected: $CpuArchitecture)."
 }
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'Install GitHub CLI: https://cli.github.com/ and run gh auth login.' }
-& gh auth status 2>$null
-if ($LASTEXITCODE -ne 0) { throw 'Run gh auth login first to access this private repo.' }
+# Public GitHub Release download does not require a GitHub login.
+$UseGh = $false
+if (Get-Command gh -ErrorAction SilentlyContinue) {
+  & gh auth status 2>$null
+  if ($LASTEXITCODE -eq 0) { $UseGh = $true }
+}
 
 $Repo = 'Doradux/remoteDoradoCommander'
 $Asset = 'remote-dorado-agent-windows-x64.zip'
 $Dir = Join-Path ([IO.Path]::GetTempPath()) ('remote-dorado-' + [guid]::NewGuid().ToString('N'))
 New-Item -Path $Dir -ItemType Directory -Force | Out-Null
 try {
-  & gh release download --repo $Repo --pattern $Asset --pattern SHA256SUMS --dir $Dir
-  if ($LASTEXITCODE -ne 0) { throw 'Failed to download release assets from GitHub.' }
+  if ($UseGh) {
+    & gh release download --repo $Repo --pattern $Asset --pattern SHA256SUMS --dir $Dir
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to download release assets from GitHub.' }
+  } else {
+    $BaseUrl = "https://github.com/$Repo/releases/latest/download"
+    Invoke-WebRequest -Uri "$BaseUrl/$Asset" -OutFile (Join-Path $Dir $Asset)
+    Invoke-WebRequest -Uri "$BaseUrl/SHA256SUMS" -OutFile (Join-Path $Dir 'SHA256SUMS')
+  }
   $Lines = Get-Content -LiteralPath (Join-Path $Dir 'SHA256SUMS')
   $Expected = $null
   foreach ($Line in $Lines) {
@@ -44,8 +53,23 @@ try {
     Write-Host 'Added to the user PATH (new terminals will pick it up).'
   }
   $env:Path += ';' + $InstallDir
-  Write-Host 'Start the agent: remote-dorado-agent'
-  Write-Host 'On first run it will ask for the PC name and open browser pairing. A relay URL is only requested if no default is configured.'
+  # Create explicit Start Menu shortcuts. Never auto-start or embed private IPs/tokens.
+  $Menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Dorado Relay'
+  New-Item -Path $Menu -ItemType Directory -Force | Out-Null
+  $Shell = New-Object -ComObject WScript.Shell
+  $StartShortcut = $Shell.CreateShortcut((Join-Path $Menu 'Dorado Relay.lnk'))
+  $StartShortcut.TargetPath = $Dest
+  $StartShortcut.WorkingDirectory = $InstallDir
+  $StartShortcut.Description = 'Connect this computer to your Dorado MCP relay'
+  $StartShortcut.Save()
+  $SetupShortcut = $Shell.CreateShortcut((Join-Path $Menu 'Configure Dorado Relay.lnk'))
+  $SetupShortcut.TargetPath = $Dest
+  $SetupShortcut.Arguments = '--setup'
+  $SetupShortcut.WorkingDirectory = $InstallDir
+  $SetupShortcut.Description = 'Pair or rename this computer'
+  $SetupShortcut.Save()
+  Write-Host 'Dorado Relay is available in the Start Menu (launch it only when you want to).'
+  Write-Host 'On first run, name your PC and approve browser pairing. No IP is needed in the launcher.'
 }
 finally {
   Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue

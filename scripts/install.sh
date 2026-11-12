@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Download ONLY a signed-in user's release binary from the private GitHub repository.
+# Download the official release binary with SHA256 verification.
 set -euo pipefail
 
 repo="Doradux/remoteDoradoCommander"
 component="${1:-agent}"
 case "$component" in agent|server) ;; *) echo 'Usage: install.sh [agent|server]' >&2; exit 2 ;; esac
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo 'Install GitHub CLI (gh) and run gh auth login first: https://cli.github.com/' >&2
-  exit 1
-fi
-if ! gh auth status >/dev/null 2>&1; then
-  echo 'Sign in with gh auth login. This repo is private.' >&2
+# Public releases can be installed without a GitHub account.
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  downloader=gh
+elif command -v curl >/dev/null 2>&1; then
+  downloader=curl
+else
+  echo 'Install curl or sign in with GitHub CLI to download releases.' >&2
   exit 1
 fi
 
@@ -27,8 +28,14 @@ fi
 asset="remote-dorado-${component}-${os}-${arch}.tar.gz"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-printf 'Downloading %s from private GitHub Releases...\n' "$asset"
-gh release download --repo "$repo" --pattern "$asset" --pattern SHA256SUMS --dir "$tmp"
+printf 'Downloading %s from official GitHub Releases...\n' "$asset"
+if [[ "$downloader" == gh ]]; then
+  gh release download --repo "$repo" --pattern "$asset" --pattern SHA256SUMS --dir "$tmp"
+else
+  base="https://github.com/$repo/releases/latest/download"
+  curl -fL --retry 2 --connect-timeout 15 -o "$tmp/$asset" "$base/$asset"
+  curl -fL --retry 2 --connect-timeout 15 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"
+fi
 
 expected="$(awk -v asset="$asset" '$2 == asset {print $1}' "$tmp/SHA256SUMS")"
 if [[ ! "$expected" =~ ^[a-f0-9]{64}$ ]]; then echo 'Checksum missing from Release' >&2; exit 1; fi
@@ -52,5 +59,5 @@ fi
 
 printf 'Run: %s/%s\n' "$install_dir" "$binary"
 if [[ "$component" == agent ]]; then
-  printf 'First run: asks the PC/session name, relay URL and token, then saves them locally.\n'
+  printf 'First run: choose your PC name and relay HTTPS origin, then approve pairing in the browser. No token is typed.\n'
 fi
