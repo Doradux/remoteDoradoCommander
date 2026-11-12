@@ -23,10 +23,11 @@ from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect
 import uvicorn
 
-from .ui import pairing_page, authorization_page
+from .ui import pairing_page, authorization_page, ui_response, HEADERS as UI_HEADERS, STATIC_DIR
 from .entitlements import configured_entitlement_file, effective_relay_seats, EntitlementError
 from .portal import (
     init_portal_db, router as portal_router, owner_exists,
@@ -212,6 +213,10 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Remote Dorado Commander", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# Versioned static Animate UI/Vite assets. Source HTML never contains inline JS
+# or styles; CSP restricts execution to assets from this exact origin.
+app.mount("/ui-assets", StaticFiles(directory=str(STATIC_DIR)), name="ui-assets")
+
 
 
 def oauth_error(error: str, status: int = 400) -> JSONResponse:
@@ -313,8 +318,7 @@ async def pairing_form(request: Request):
         candidate, device, logged_in=bool(session), csrf=session.csrf if session else "",
     ), headers={
         **pairing_headers(),
-        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
-                                   "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "Content-Security-Policy": UI_HEADERS["Content-Security-Policy"],
     })
 
 
@@ -340,7 +344,10 @@ async def pairing_approve(request: Request):
             conn.execute("UPDATE pairing_requests SET attempts=attempts+1 WHERE user_hash=?", (digest(user_code),))
             return oauth_error("access_denied", 403)
         conn.execute("UPDATE pairing_requests SET status='approved' WHERE user_hash=?", (digest(user_code),))
-    return HTMLResponse("<h1>Equipo autorizado</h1><p>Puedes cerrar esta pestaña. Vuelve al programa; se conectará automáticamente.</p>", headers=pairing_headers())
+    return ui_response(
+        "success", title="Equipo autorizado",
+        message="Vuelve a la aplicación del ordenador. Se conectará automáticamente.",
+    )
 
 
 @app.post("/pair/token")
@@ -585,9 +592,9 @@ async def authorize(req: Request):
     callback_origin = f"{callback.scheme}://{callback.hostname}"
     if callback_port is not None:
         callback_origin += f":{callback_port}"
-    authorization_csp = (
-        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
-        f"form-action 'self' {callback_origin}; frame-ancestors 'none'"
+    authorization_csp = UI_HEADERS["Content-Security-Policy"].replace(
+        "form-action 'self';",
+        f"form-action 'self' {callback_origin};",
     )
     return HTMLResponse(authorization_page(
         login_request, callback_origin, logged_in=bool(session),

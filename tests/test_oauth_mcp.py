@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from remote_dorado.server import app
+from tests.ui_helpers import page_data
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def start_oauth(client):
     assert "form-action 'self' https://chatgpt.com;" in csp
     assert "base-uri 'none'" in csp
     assert "frame-ancestors 'none'" in csp
-    request_id = re.search(r"name='request_id' value='([^']+)'", authorize.text).group(1)
+    request_id = page_data(authorize.text)["requestId"]
     approval = client.post("/oauth/approve", data={"request_id": request_id, "password": "secure-test-password-12345"}, follow_redirects=False)
     assert approval.status_code == 303
     redirect_location = urlsplit(approval.headers["location"])
@@ -59,7 +60,9 @@ def test_oauth_form_csp_scopes_callback_to_registered_origin(client):
     csp = response.headers["content-security-policy"]
     assert "form-action 'self' https://custom-client.example.net:8443;" in csp
     assert "https://chatgpt.com" not in csp
-    assert "script-src" not in csp
+    assert "script-src 'self'" in csp
+    assert "style-src 'self'" in csp
+    assert "'unsafe-inline'" not in csp
 
 
 def test_oauth_pkce_replay_refresh_and_mcp(client):

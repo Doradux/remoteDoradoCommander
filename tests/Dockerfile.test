@@ -3,6 +3,10 @@ WORKDIR /src
 COPY pyproject.toml ./
 COPY remote_dorado/ ./remote_dorado/
 COPY scripts/ ./scripts/
+COPY frontend/package.json ./frontend/package.json
+COPY frontend/src/ ./frontend/src/
+COPY frontend/public/ ./frontend/public/
+COPY docs/ANIMATE_UI_CATALOG.md ./docs/ANIMATE_UI_CATALOG.md
 COPY .github/workflows/release.yml ./.github/workflows/release.yml
 COPY tests/ ./tests/
 RUN pip install --no-cache-dir -e '.[test]'

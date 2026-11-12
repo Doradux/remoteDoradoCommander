@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from remote_dorado.server import app, database
 from remote_dorado.portal import issue_invite, owner_exists, invitation_pending
+from tests.ui_helpers import page_data
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def test_invitation_stored_as_hash_and_single_use(client):
     assert start.headers["location"] == "/portal/activate"
     html = client.get("/portal/activate")
     assert html.status_code == 200
-    assert "Activa tu espacio" in html.text
+    assert page_data(html.text)["page"] == "activate"
     assert invite not in html.text
 
     assert client.post("/portal/activate", data={

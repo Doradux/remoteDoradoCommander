@@ -2,6 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from remote_dorado.server import app
+from tests.ui_helpers import page_data
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
@@ -31,7 +32,7 @@ def test_operator_can_revoke_oauth_client_and_tokens(client):
         "state": "opaque", "code_challenge": challenge, "code_challenge_method": "S256",
     })
     assert auth.status_code == 200
-    request_id = re.search(r"name='request_id' value='([^']+)'", auth.text).group(1)
+    request_id = page_data(auth.text)["requestId"]
     approval = client.post("/oauth/approve", data={
         "request_id": request_id, "password": "secure-test-password-12345"
     }, follow_redirects=False)

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from remote_dorado.server import app, database
 from remote_dorado.portal import create_owner, safe_next, password_hash, password_matches
+from tests.ui_helpers import page_data
 
 
 @pytest.fixture
@@ -35,9 +36,7 @@ def login(client, destination="/portal"):
 
 
 def csrf_from(html):
-    value = re.search(r"name='csrf' value='([^']+)'", html)
-    assert value is not None
-    return value.group(1)
+    return page_data(html)["csrf"]
 
 
 def test_password_storage_and_duplicate_owner(client):
@@ -61,7 +60,7 @@ def test_login_dashboard_session_cookie_csrf_logout(client):
         "email": "owner@example.com", "password": "bad-guess",
     })
     assert incorrect.status_code == 200
-    assert "No se pudo iniciar" in incorrect.text
+    assert page_data(incorrect.text)["error"] is True
 
     logged = login(client)
     assert "HttpOnly" in logged.headers["set-cookie"]
@@ -69,7 +68,7 @@ def test_login_dashboard_session_cookie_csrf_logout(client):
     assert "/portal" == logged.headers["location"]
     dash = client.get("/portal")
     assert dash.status_code == 200
-    assert "Mis dispositivos" in dash.text
+    assert page_data(dash.text)["page"] == "dashboard"
     assert "owner@example.com" in dash.text
     csrf = csrf_from(dash.text)
 
@@ -113,7 +112,7 @@ def test_device_linking_uses_portal_session_and_csrf_not_admin_password(client):
     approval_page = client.get("/pair", params={"code": data["user_code"]})
     assert approval_page.status_code == 200
     assert "work-pc" in approval_page.text
-    assert "Tu sesión verificada" in approval_page.text
+    assert page_data(approval_page.text)["loggedIn"] is True
     assert "name='password'" not in approval_page.text
     csrf = csrf_from(approval_page.text)
     assert client.post("/pair/approve", data={"user_code": data["user_code"], "csrf": "wrong"}).status_code == 403
@@ -161,7 +160,7 @@ def test_oauth_requires_portal_login_and_csrf_and_can_revoke_client(client):
     assert auth.status_code == 200
     assert "name='password'" not in auth.text
     csrf = csrf_from(auth.text)
-    request_id = re.search(r"name='request_id' value='([^']+)'", auth.text).group(1)
+    request_id = page_data(auth.text)["requestId"]
     assert client.post("/oauth/approve", data={
         "request_id": request_id, "csrf": "tampered",
     }).status_code == 403
@@ -198,8 +197,8 @@ def test_oauth_requires_portal_login_and_csrf_and_can_revoke_client(client):
     assert "/private/do-not-log-this-path" not in client.get("/portal").text
 
     dash = client.get("/portal")
-    assert "Actividad reciente" in dash.text
-    assert "read_file" in dash.text
+    assert page_data(dash.text)["page"] == "dashboard"
+    assert page_data(dash.text)["activity"][0]["tool"] == "read_file"
     assert client_id in dash.text
     assert client.post("/portal/oauth/revoke", data={
         "client_id": client_id, "csrf": "wrong",

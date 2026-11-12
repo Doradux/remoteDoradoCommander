@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from getpass import getpass
-from html import escape
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from .ui import ui_response, HEADERS as UI_HEADERS
 
 router = APIRouter()
 COOKIE = "dorado_portal"
@@ -199,84 +200,7 @@ def login_redirect(destination: str = "/portal") -> RedirectResponse:
                             status_code=303, headers=_HEADERS)
 
 
-_HEADERS = {
-    "Cache-Control": "no-store",
-    "Referrer-Policy": "no-referrer",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Content-Security-Policy": (
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
-        "base-uri 'none'; frame-ancestors 'none'"
-    ),
-}
-
-_STYLE = """
-:root{color-scheme:dark;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
---bg:#070c15;--card:#121d2d;--soft:#192639;--border:#2b3a50;--text:#edf2f8;--muted:#9aaec2;
---accent:#f2bd65;--green:#68ddb5}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 30% -15%,#20334c 0,#070c15 50%);
-color:var(--text)}.shell{width:min(1120px,100%);margin:auto;padding:26px 24px 70px}
-nav{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:48px}
-.brand{display:flex;align-items:center;gap:12px;font-size:17px;font-weight:760;letter-spacing:-.3px}
-.logo{display:grid;place-items:center;width:41px;height:41px;border-radius:11px;background:#f2bd651a;border:1px solid #f2bd6555;
-color:var(--accent);font-size:22px;font-weight:850}
-.navright{display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px}
-a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-h1{margin:0 0 10px;font-size:clamp(28px,4vw,38px);letter-spacing:-.95px}
-h2{font-size:17px;letter-spacing:-.35px;margin:0}
-.lead{color:var(--muted);line-height:1.65;margin:0 0 30px;max-width:720px}
-.kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:28px}
-.kpi,.panel{background:var(--card);border:1px solid var(--border);border-radius:17px}
-.kpi{padding:23px}.kpi .num{font-size:34px;letter-spacing:-1px;font-weight:760}
-.muted{color:var(--muted)}.small{font-size:12px}.kpi .name{color:var(--muted);font-size:13px;margin-top:5px}
-.panel{padding:24px;margin-bottom:18px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:18px}
-table{border-collapse:collapse;width:100%;text-align:left}th{font-size:11px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:1px}
-td,th{padding:15px 10px;border-bottom:1px solid #2b3a506f;vertical-align:middle}
-tr:last-child td{border-bottom:0}td{font-size:13px;overflow-wrap:anywhere}
-.status{display:inline-flex;align-items:center;gap:7px;font-size:12px}
-.dot{width:7px;height:7px;border-radius:100%;background:#778599}
-.status.online .dot{background:var(--green);box-shadow:0 0 10px #68ddb54d}
-.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;color:var(--muted);word-break:break-all}
-button{font:inherit;cursor:pointer;border-radius:9px;padding:10px 13px;background:var(--accent);color:#0f1723;border:0;font-weight:760}
-button:hover{filter:brightness(1.06)}button.ghost{border:1px solid var(--border);background:transparent;color:var(--text)}
-button.danger{border:1px solid #db7c7c55;background:#db7c7c0e;color:#ffaaa9}
-form{margin:0}label{display:block;color:var(--muted);font-size:13px;margin-bottom:8px}
-input{display:block;width:100%;background:#0b1422;color:var(--text);font:inherit;border:1px solid #40516b;
-padding:13px;border-radius:10px;margin-bottom:19px;outline:none}
-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px #f2bd6529}
-.auth{max-width:455px;margin:8vh auto 0}.auth .panel{padding:31px}
-.auth h1{font-size:27px}.auth button{width:100%}
-.error{background:#6b282833;border:1px solid #c6656555;color:#ffb7b7;padding:13px;border-radius:10px;margin:0 0 19px;font-size:13px}
-.notice{background:#f2bd650c;color:#e9cf9b;border:1px solid #f2bd6530;border-radius:11px;padding:16px;
-font-size:13px;line-height:1.6}
-.empty{color:var(--muted);font-size:13px;padding:24px 8px}
-.actions{display:flex;gap:8px;justify-content:flex-end}.scroll{overflow-x:auto}
-@media(max-width:650px){nav{margin-bottom:30px;align-items:flex-start;flex-direction:column}
-.shell{padding:20px 15px 55px}.kpis{grid-template-columns:1fr 1fr}.panel{padding:16px}.kpi{padding:16px}
-.kpis .kpi:last-child{grid-column:1 / -1}td,th{padding:12px 7px}h1{font-size:28px}}
-"""
-
-
-def _page(title: str, body: str, email: str | None = None, csrf: str = "") -> HTMLResponse:
-    logout = (
-        f"<form method='post' action='/portal/logout'><input type='hidden' name='csrf' value='{escape(csrf)}'>"
-        "<button class='ghost' type='submit'>Cerrar sesión</button></form>"
-        if email else ""
-    )
-    account = (
-        f"<div class='navright'><span>{escape(email)}</span><a href='/portal/security'>Seguridad</a>{logout}</div>"
-        if email else "<span class='muted small'>Panel de cliente · acceso privado</span>"
-    )
-    html = (
-        "<!doctype html><html lang='es'><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<title>{escape(title)} | Dorado Relay</title><style>{_STYLE}</style></head>"
-        "<body><div class='shell'><nav><div class='brand'><div class='logo'>D</div>"
-        "<span>Dorado Relay</span></div>" + account + "</nav>" + body +
-        "</div></body></html>"
-    )
-    return HTMLResponse(html, headers=_HEADERS)
-
+_HEADERS = UI_HEADERS
 
 def _owner_email() -> str | None:
     from .server import database
@@ -286,47 +210,11 @@ def _owner_email() -> str | None:
 
 
 def _login_page(next_path: str, error: str = "") -> HTMLResponse:
-    error_html = "<div class='error'>No se pudo iniciar sesión. Revisa los datos o inténtalo más tarde.</div>" if error else ""
-    body = (
-        "<section class='auth'><div class='panel'><h1>Accede a tu espacio</h1>"
-        "<p class='lead'>Gestiona tus ordenadores y conexiones MCP con seguridad.</p>"
-        + error_html +
-        "<form method='post' action='/portal/login'>"
-        f"<input type='hidden' name='next' value='{escape(safe_next(next_path), quote=True)}'>"
-        "<label for='email'>Correo electrónico</label>"
-        "<input name='email' id='email' type='email' maxlength='254' autocomplete='username' required>"
-        "<label for='password'>Contraseña</label>"
-        "<input name='password' id='password' type='password' autocomplete='current-password' required>"
-        "<button type='submit'>Iniciar sesión</button></form></div>"
-        "<p class='muted small'>Tu cuenta se crea al contratar un relay aislado. "
-        "No se permiten registros públicos en esta versión piloto.</p></section>"
-    )
-    return _page("Iniciar sesión", body)
+    return ui_response("login", next=safe_next(next_path), error=bool(error))
 
 
 def _activation_page(error: bool = False) -> HTMLResponse:
-    error_html = (
-        "<div class='error'>No se ha podido activar la cuenta. Comprueba el código "
-        "y el correo, o solicita uno nuevo al administrador.</div>" if error else ""
-    )
-    body = (
-        "<section class='auth'><div class='panel'><h1>Activa tu espacio</h1>"
-        "<p class='lead'>Introduce el código de un solo uso que te ha facilitado "
-        "Dorado Relay. Tu contraseña la eliges tú.</p>" + error_html +
-        "<form method='post' action='/portal/activate'>"
-        "<label for='email'>Correo de la invitación</label>"
-        "<input id='email' name='email' type='email' required maxlength='254' autocomplete='email'>"
-        "<label for='code'>Código de activación</label>"
-        "<input id='code' name='code' type='text' required maxlength='120' spellcheck='false'>"
-        "<label for='password'>Crea una contraseña (mínimo 12 caracteres)</label>"
-        "<input id='password' name='password' type='password' required minlength='12' autocomplete='new-password'>"
-        "<label for='repeat'>Repite la contraseña</label>"
-        "<input id='repeat' name='repeat' type='password' required minlength='12' autocomplete='new-password'>"
-        "<button type='submit'>Activar cuenta</button></form></div>"
-        "<p class='muted small'>Por seguridad, las cuentas nuevas requieren una invitación. "
-        "No compartas tu código con otras personas.</p></section>"
-    )
-    return _page("Activar cuenta", body)
+    return ui_response("activate", error=bool(error))
 
 
 @router.get("/portal/activate")
@@ -482,93 +370,37 @@ async def dashboard(request: Request):
             "SELECT created,tool,device,status FROM action_audit "
             "ORDER BY created DESC,id DESC LIMIT 25"
         ).fetchall()
-    used = len(devices)
     try:
         maximum = max_devices()
         billing_unavailable = False
     except RuntimeError:
         maximum = None
         billing_unavailable = True
-    connected = sum(row["name"] in hub.devices for row in devices)
-    seats = (
-        f"{used} / {maximum}" if maximum is not None and
-        (maximum or os.environ.get("DORADO_ENTITLEMENT_FILE")) else
-        "Sin verificar" if billing_unavailable else str(used)
+    return ui_response(
+        "dashboard",
+        email=email,
+        csrf=session.csrf,
+        devices=[
+            {"name": row["name"], "created": row["created"],
+             "online": row["name"] in hub.devices}
+            for row in devices
+        ],
+        clients=[
+            {"id": row["id"], "redirectUris": json.loads(row["redirect_uris"])}
+            for row in clients
+        ],
+        activity=[
+            {"when": time.strftime("%d/%m/%Y %H:%M UTC", time.gmtime(row["created"])),
+             "tool": row["tool"], "device": row["device"], "status": row["status"]}
+            for row in activity
+        ],
+        maxDevices=(
+            None if maximum == 0 and not os.environ.get("DORADO_ENTITLEMENT_FILE")
+            else maximum
+        ),
+        billingUnavailable=billing_unavailable,
+        billingSigned=bool(os.environ.get("DORADO_ENTITLEMENT_FILE")),
     )
-    device_rows = []
-    for row in devices:
-        name = escape(row["name"])
-        online = row["name"] in hub.devices
-        label = "Conectado" if online else "Desconectado"
-        state_class = "online" if online else ""
-        device_rows.append(
-            f"<tr><td><strong>{name}</strong></td><td><span class='status {state_class}'>"
-            f"<i class='dot'></i>{label}</span></td>"
-            "<td><form method='post' action='/portal/devices/revoke' class='actions'>"
-            f"<input type='hidden' name='csrf' value='{session.csrf}'>"
-            f"<input type='hidden' name='device_name' value='{escape(row['name'], quote=True)}'>"
-            "<button type='submit' class='danger'>Desvincular</button></form></td></tr>"
-        )
-    client_rows = []
-    for row in clients:
-        client_id = escape(row["id"])
-        client_rows.append(
-            f"<tr><td><span class='code'>{client_id}</span></td>"
-            "<td><form method='post' action='/portal/oauth/revoke' class='actions'>"
-            f"<input type='hidden' name='csrf' value='{session.csrf}'>"
-            f"<input type='hidden' name='client_id' value='{escape(row['id'], quote=True)}'>"
-            "<button class='danger' type='submit'>Revocar acceso</button></form></td></tr>"
-        )
-    devices_html = (
-        "<div class='scroll'><table><thead><tr><th>Equipo</th><th>Estado</th><th></th></tr>"
-        "</thead><tbody>" + "".join(device_rows) + "</tbody></table></div>"
-        if device_rows else "<div class='empty'>Aún no hay ordenadores vinculados.</div>"
-    )
-    clients_html = (
-        "<div class='scroll'><table><thead><tr><th>Conexión MCP</th><th></th></tr></thead>"
-        "<tbody>" + "".join(client_rows) + "</tbody></table></div>"
-        if client_rows else "<div class='empty'>No hay asistentes MCP autorizados.</div>"
-    )
-    activity_rows = [
-        "<tr><td class='code'>" + escape(time.strftime("%d/%m/%Y %H:%M UTC", time.gmtime(row["created"]))) +
-        "</td><td>" + escape(row["tool"]) + "</td><td>" + escape(row["device"]) +
-        "</td><td>" + ("Correcta" if row["status"] == "success" else "Error") + "</td></tr>"
-        for row in activity
-    ]
-    activity_html = (
-        "<div class='scroll'><table><thead><tr><th>Fecha</th><th>Acción</th>"
-        "<th>Equipo</th><th>Resultado</th></tr></thead><tbody>" +
-        "".join(activity_rows) + "</tbody></table></div>"
-        if activity_rows else "<div class='empty'>Todavía no hay operaciones registradas.</div>"
-    )
-    billing_notice = (
-        "<div class='error'>La cuota de tu suscripción no está disponible. "
-        "Puedes consultar y desvincular dispositivos, pero no añadir nuevos "
-        "hasta que se restablezca la verificación.</div>"
-        if billing_unavailable else ""
-    )
-    body = (
-        "<h1>Mis dispositivos</h1>"
-        "<p class='lead'>Consulta tus ordenadores, revoca accesos y controla los equipos "
-        "vinculados a este servidor privado.</p>" + billing_notice +
-        "<div class='kpis'>"
-        f"<div class='kpi'><div class='num'>{connected}</div><div class='name'>En línea</div></div>"
-        f"<div class='kpi'><div class='num'>{used}</div><div class='name'>Registrados</div></div>"
-        f"<div class='kpi'><div class='num'>{seats}</div><div class='name'>Plazas utilizadas</div></div>"
-        "</div><div class='panel'><div class='panel-head'><h2>Ordenadores</h2>"
-        "<span class='muted small'>Vinculación desde la aplicación del equipo</span></div>" +
-        devices_html +
-        "</div><div class='panel'><div class='panel-head'><h2>Asistentes de IA autorizados</h2>"
-        "</div>" + clients_html +
-        "</div><div class='panel'><div class='panel-head'><h2>Actividad reciente</h2>"
-        "<span class='muted small'>Solo metadatos · purga durante el uso</span></div>" +
-        activity_html +
-        "</div><div class='notice'>Para añadir un ordenador, abre Dorado Relay en ese equipo "
-        "y aprueba el código de vinculación en tu navegador. No debes compartir contraseñas "
-        "ni tokens con el asistente de IA. Las suscripciones y ampliaciones se gestionan "
-        "manualmente durante el programa piloto.</div>"
-    )
-    return _page("Mis dispositivos", body, email=email, csrf=session.csrf)
 
 
 @router.post("/portal/devices/revoke")
@@ -626,22 +458,9 @@ async def security_form(request: Request):
     session, redirect = _portal_or_login(request)
     if redirect:
         return redirect
-    email = _owner_email() or "Cuenta"
-    body = (
-        "<a href='/portal'>Volver al panel</a>"
-        "<section class='auth'><div class='panel'><h1>Cambiar contraseña</h1>"
-        "<p class='lead'>Al cambiarla, todas las sesiones actuales se cerrarán por seguridad.</p>"
-        "<form method='post' action='/portal/security'>"
-        f"<input type='hidden' name='csrf' value='{session.csrf}'>"
-        "<label for='current'>Contraseña actual</label>"
-        "<input id='current' type='password' name='current' required autocomplete='current-password'>"
-        "<label for='new'>Contraseña nueva (mínimo 12 caracteres)</label>"
-        "<input id='new' type='password' name='new' required minlength='12' autocomplete='new-password'>"
-        "<label for='repeat'>Repite la nueva contraseña</label>"
-        "<input id='repeat' type='password' name='repeat' required minlength='12' autocomplete='new-password'>"
-        "<button type='submit'>Actualizar contraseña</button></form></div></section>"
+    return ui_response(
+        "security", email=_owner_email() or "Cuenta", csrf=session.csrf
     )
-    return _page("Seguridad", body, email=email, csrf=session.csrf)
 
 
 @router.post("/portal/security")

@@ -111,12 +111,15 @@ def test_security_guard_against_legacy_tokens_in_commercial_mode(monkeypatch):
 
 def test_pairing_html_escapes_untrusted_display_values():
     from remote_dorado.ui import pairing_page, authorization_page
+    from tests.ui_helpers import page_data
     html = pairing_page("abc' autofocus", "<script>alert(1)</script>")
     assert "<script>alert(1)</script>" not in html
-    assert "&lt;script&gt;" in html
-    assert "frame-ancestors" not in html  # delivered via server's CSP header, not HTML
+    assert r"\u003cscript\u003e" in html
+    assert page_data(html)["deviceName"] == "<script>alert(1)</script>"
     oauth = authorization_page("abc' onclick='bad", "https://client.example")
-    assert "value='abc&#x27; onclick=&#x27;bad'" in oauth
+    assert page_data(oauth)["requestId"] == "abc' onclick='bad"
+    assert "<script type='module'" in oauth
+    assert "<style>" not in oauth  # no hand-written inline templates survive
 
 
 def test_release_pipeline_does_not_embed_residential_ip():

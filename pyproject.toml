@@ -20,6 +20,9 @@ remote-dorado-control-plane = "remote_dorado.control_plane:main"
 [tool.setuptools.packages.find]
 include = ["remote_dorado*"]
 
+[tool.setuptools.package-data]
+remote_dorado = ["static/index.html", "static/assets/*", "static/.vite/manifest.json", "static/licenses/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
