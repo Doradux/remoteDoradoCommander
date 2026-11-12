@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from .ui import ui_response, HEADERS as UI_HEADERS
+from .http_inputs import bounded_form
 
 router = APIRouter()
 COOKIE = "dorado_portal"
@@ -231,7 +232,7 @@ async def activate_submit(request: Request):
     from .server import database
     if owner_exists():
         return Response("Cuenta ya activada", status_code=403, headers=_HEADERS)
-    form = await request.form()
+    form = await bounded_form(request, 16_384)
     try:
         email = valid_email(str(form.get("email", "")))
         password = str(form.get("password", ""))
@@ -298,7 +299,7 @@ async def login_submit(request: Request):
     from .server import database
     if not owner_exists():
         return Response("Portal no configurado", status_code=503, headers=_HEADERS)
-    form = await request.form()
+    form = await bounded_form(request, 16_384)
     next_path = safe_next(str(form.get("next", "/portal")))
     raw_email = str(form.get("email", ""))
     password = str(form.get("password", ""))
@@ -409,7 +410,7 @@ async def revoke_device(request: Request):
     session, redirect = _portal_or_login(request)
     if redirect:
         return redirect
-    form = await request.form()
+    form = await bounded_form(request, 16_384)
     if not csrf_ok(session, str(form.get("csrf", ""))):
         return Response("CSRF no válido", status_code=403, headers=_HEADERS)
     name = str(form.get("device_name", ""))
@@ -426,7 +427,7 @@ async def revoke_oauth(request: Request):
     session, redirect = _portal_or_login(request)
     if redirect:
         return redirect
-    form = await request.form()
+    form = await bounded_form(request, 16_384)
     if not csrf_ok(session, str(form.get("csrf", ""))):
         return Response("CSRF no válido", status_code=403, headers=_HEADERS)
     client_id = str(form.get("client_id", ""))
@@ -443,7 +444,7 @@ async def logout(request: Request):
     session, redirect = _portal_or_login(request)
     if redirect:
         return redirect
-    form = await request.form()
+    form = await bounded_form(request, 16_384)
     if not csrf_ok(session, str(form.get("csrf", ""))):
         return Response("CSRF no válido", status_code=403, headers=_HEADERS)
     with database() as conn:
@@ -469,7 +470,7 @@ async def change_password(request: Request):
     session, redirect = _portal_or_login(request)
     if redirect:
         return redirect
-    form = await request.form()
+    form = await bounded_form(request, 16_384)
     if not csrf_ok(session, str(form.get("csrf", ""))):
         return Response("CSRF no válido", status_code=403, headers=_HEADERS)
     old = str(form.get("current", ""))

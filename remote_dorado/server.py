@@ -28,6 +28,7 @@ from starlette.websockets import WebSocketDisconnect
 import uvicorn
 
 from .ui import pairing_page, authorization_page, ui_response, HEADERS as UI_HEADERS, STATIC_DIR
+from .http_inputs import bounded_json, bounded_form
 from .entitlements import configured_entitlement_file, effective_relay_seats, EntitlementError
 from .portal import (
     init_portal_db, router as portal_router, owner_exists,
@@ -35,7 +36,7 @@ from .portal import (
 )
 
 VERSION = "2025-06-18"
-APP_VERSION = "0.4.4"
+APP_VERSION = "0.5.0rc1"
 PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 PAIR_LIFETIME_SECONDS = 600
 PAIR_POLL_INTERVAL = 3
@@ -188,7 +189,13 @@ class DeviceHub:
         device = self.devices.get(name)
         if not device:
             raise RuntimeError(f"Device '{name}' is offline")
-        async with self.capacity:
+        # Reject bursts promptly instead of allowing unlimited waiting RPCs.
+        # The agent itself also has a fixed worker pool and a bounded queue.
+        try:
+            await asyncio.wait_for(self.capacity.acquire(), timeout=1.0)
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError("Relay busy; retry this operation later") from exc
+        try:
             request_id = secrets.token_hex(16)
             future = asyncio.get_running_loop().create_future()
             device.pending[request_id] = future
@@ -201,6 +208,8 @@ class DeviceHub:
                 return reply.get("result", {})
             finally:
                 device.pending.pop(request_id, None)
+        finally:
+            self.capacity.release()
 
 
 hub = DeviceHub()
@@ -257,7 +266,7 @@ def pairing_headers() -> dict[str, str]:
 async def pairing_start(request: Request):
     # No login needed to *request* pairing; approval is administrator protected.
     try:
-        data = await request.json()
+        data = await bounded_json(request, 8_192)
     except ValueError:
         return oauth_error("invalid_request")
     name = data.get("device_name") if isinstance(data, dict) else None
@@ -324,7 +333,7 @@ async def pairing_form(request: Request):
 
 @app.post("/pair/approve")
 async def pairing_approve(request: Request):
-    form = await request.form()
+    form = await bounded_form(request, 16_384)
     user_code = normalize_user_code(str(form.get("user_code", "")))
     password = str(form.get("password", ""))
     session = owner_session(request) if commercial_portal_enabled() else None
@@ -353,7 +362,7 @@ async def pairing_approve(request: Request):
 @app.post("/pair/token")
 async def pairing_token(request: Request):
     try:
-        data = await request.json()
+        data = await bounded_json(request, 8_192)
     except ValueError:
         return oauth_error("invalid_request")
     device_code = data.get("device_code") if isinstance(data, dict) else None
@@ -423,7 +432,7 @@ async def admin_revoke_device(request: Request):
     if not admin_authenticated(request):
         return oauth_error("access_denied", 403)
     try:
-        body = await request.json()
+        body = await bounded_json(request, 8_192)
     except ValueError:
         return oauth_error("invalid_request")
     name = body.get("device_name") if isinstance(body, dict) else None
@@ -477,7 +486,7 @@ async def admin_oauth_revoke_client(request: Request):
     if not admin_authenticated(request):
         return oauth_error("access_denied", 403)
     try:
-        body = await request.json()
+        body = await bounded_json(request, 8_192)
     except ValueError:
         return oauth_error("invalid_request")
     client_id = body.get("client_id") if isinstance(body, dict) else None
@@ -577,8 +586,26 @@ async def authorize(req: Request):
     if not require_resource(q.get("resource")):
         return oauth_error("invalid_target")
     login_request = secrets.token_urlsafe(32)
+    now = int(time.time())
     with database() as conn:
-        conn.execute("INSERT INTO authorization_requests VALUES (?,?,?,?,?,?,?)", (digest(login_request), cid, redirect, state, challenge, resource_url(), int(time.time()) + 300))
+        conn.execute("BEGIN IMMEDIATE")
+        # Public registered OAuth clients must not fill a relay database with
+        # unlimited unused consent requests. Expire old requests on issuance.
+        conn.execute("DELETE FROM authorization_requests WHERE expires<=?", (now,))
+        conn.execute("DELETE FROM codes WHERE expires<=?", (now,))
+        active_client = conn.execute(
+            "SELECT count(*) FROM authorization_requests WHERE client_id=?", (cid,),
+        ).fetchone()[0]
+        active_total = conn.execute(
+            "SELECT count(*) FROM authorization_requests",
+        ).fetchone()[0]
+        if active_client >= 20 or active_total >= 500:
+            return oauth_error("too_many_authorization_requests", 429)
+        conn.execute(
+            "INSERT INTO authorization_requests VALUES (?,?,?,?,?,?,?)",
+            (digest(login_request), cid, redirect, state, challenge,
+             resource_url(), now + 300),
+        )
     # Browsers such as Chromium apply form-action CSP to the entire form redirect
     # chain. Include only the origin of the already-registered OAuth callback,
     # otherwise the successful POST /oauth/approve -> 303 callback is blocked.
@@ -608,7 +635,7 @@ async def authorize(req: Request):
 
 @app.post("/oauth/approve")
 async def approve(req: Request):
-    form = await req.form()
+    form = await bounded_form(req, 16_384)
     request_id, password = str(form.get("request_id", "")), str(form.get("password", ""))
     session = owner_session(req) if commercial_portal_enabled() else None
     if commercial_portal_enabled() and not csrf_ok(session, str(form.get("csrf", ""))):
@@ -634,6 +661,7 @@ async def approve(req: Request):
 def issue_tokens(conn: sqlite3.Connection, cid: str) -> dict[str, Any]:
     access, refresh = secrets.token_urlsafe(48), secrets.token_urlsafe(48)
     now = int(time.time())
+    conn.execute("DELETE FROM tokens WHERE expires<=?", (now,))
     conn.execute("INSERT INTO tokens VALUES (?,?,?,?)", (digest(access), cid, "access", now + 3600))
     conn.execute("INSERT INTO tokens VALUES (?,?,?,?)", (digest(refresh), cid, "refresh", now + 30 * 86400))
     return {"access_token": access, "token_type": "Bearer", "expires_in": 3600, "refresh_token": refresh, "scope": "remote offline_access"}
@@ -641,7 +669,7 @@ def issue_tokens(conn: sqlite3.Connection, cid: str) -> dict[str, Any]:
 
 @app.post("/oauth/token")
 async def token(req: Request):
-    form = await req.form()
+    form = await bounded_form(req, 16_384)
     cid, grant = str(form.get("client_id", "")), str(form.get("grant_type", ""))
     if not require_resource(str(form.get("resource", ""))):
         return oauth_error("invalid_target")
@@ -810,8 +838,27 @@ async def agent_socket(ws: WebSocket):
 app.include_router(portal_router)
 
 
-def main():
-    uvicorn.run("remote_dorado.server:app", host=os.environ.get("DORADO_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("DORADO_PORT", "8765")), proxy_headers=False)
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Dorado Relay self-hosted MCP server")
+    parser.add_argument("--check-assets", action="store_true",
+                        help="Validate the bundled Animate UI assets without starting a server")
+    args = parser.parse_args()
+    if args.check_assets:
+        from .ui import _assets
+        js, css = _assets()
+        paths = [STATIC_DIR / js, *(STATIC_DIR / file for file in css),
+                 STATIC_DIR / "licenses/animate-ui-LICENSE.md"]
+        if not all(path.is_file() and path.stat().st_size > 0 for path in paths):
+            parser.error("Missing compiled UI asset or third-party license")
+        print("Dorado Relay UI assets and license: OK")
+        return
+    uvicorn.run(
+        "remote_dorado.server:app",
+        host=os.environ.get("DORADO_BIND_HOST", "127.0.0.1"),
+        port=int(os.environ.get("DORADO_PORT", "8765")),
+        proxy_headers=False, ws_max_size=3_000_000, workers=1,
+    )
 
 
 if __name__ == "__main__":
