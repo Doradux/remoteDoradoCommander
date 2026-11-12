@@ -15,6 +15,7 @@ test = ["pytest>=8,<10"]
 [project.scripts]
 remote-dorado-server = "remote_dorado.server:main"
 remote-dorado-agent = "remote_dorado.agent:main"
+remote-dorado-control-plane = "remote_dorado.control_plane:main"
 
 [tool.setuptools.packages.find]
 include = ["remote_dorado*"]

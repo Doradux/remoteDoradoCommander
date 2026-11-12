@@ -482,9 +482,19 @@ async def dashboard(request: Request):
             "SELECT created,tool,device,status FROM action_audit "
             "ORDER BY created DESC,id DESC LIMIT 25"
         ).fetchall()
-    used, maximum = len(devices), max_devices()
+    used = len(devices)
+    try:
+        maximum = max_devices()
+        billing_unavailable = False
+    except RuntimeError:
+        maximum = None
+        billing_unavailable = True
     connected = sum(row["name"] in hub.devices for row in devices)
-    seats = f"{used} / {maximum}" if maximum else str(used)
+    seats = (
+        f"{used} / {maximum}" if maximum is not None and
+        (maximum or os.environ.get("DORADO_ENTITLEMENT_FILE")) else
+        "Sin verificar" if billing_unavailable else str(used)
+    )
     device_rows = []
     for row in devices:
         name = escape(row["name"])
@@ -531,10 +541,16 @@ async def dashboard(request: Request):
         "".join(activity_rows) + "</tbody></table></div>"
         if activity_rows else "<div class='empty'>Todavía no hay operaciones registradas.</div>"
     )
+    billing_notice = (
+        "<div class='error'>La cuota de tu suscripción no está disponible. "
+        "Puedes consultar y desvincular dispositivos, pero no añadir nuevos "
+        "hasta que se restablezca la verificación.</div>"
+        if billing_unavailable else ""
+    )
     body = (
         "<h1>Mis dispositivos</h1>"
         "<p class='lead'>Consulta tus ordenadores, revoca accesos y controla los equipos "
-        "vinculados a este servidor privado.</p>"
+        "vinculados a este servidor privado.</p>" + billing_notice +
         "<div class='kpis'>"
         f"<div class='kpi'><div class='num'>{connected}</div><div class='name'>En línea</div></div>"
         f"<div class='kpi'><div class='num'>{used}</div><div class='name'>Registrados</div></div>"

@@ -27,6 +27,7 @@ from starlette.websockets import WebSocketDisconnect
 import uvicorn
 
 from .ui import pairing_page, authorization_page
+from .entitlements import configured_entitlement_file, effective_relay_seats, EntitlementError
 from .portal import (
     init_portal_db, router as portal_router, owner_exists,
     owner_session, csrf_ok, commercial_portal_enabled, login_redirect,
@@ -74,11 +75,15 @@ def db_path() -> Path:
 
 
 def max_devices() -> int:
-    """Per-relay seat cap. Zero means unrestricted (self-hosted compatibility).
+    """One isolated relay's seats; 0 means frozen only when signed billing is on.
 
-    This is NOT a multi-tenant plan entitlement: one commercial relay must be
-    provisioned per customer until proper tenant isolation exists.
+    The legacy self-hosted default (DORADO_MAX_DEVICES=0) remains unrestricted.
     """
+    if configured_entitlement_file():
+        try:
+            return effective_relay_seats()
+        except EntitlementError as exc:
+            raise RuntimeError("Billing entitlement unavailable; refusing new pairings") from exc
     raw = os.environ.get("DORADO_MAX_DEVICES", "0")
     try:
         value = int(raw)
@@ -116,7 +121,9 @@ def init_db() -> None:
         raise RuntimeError("Use public HTTPS for DORADO_PUBLIC_URL; HTTP is allowed only on loopback for local tests")
     if len(os.environ["DORADO_ADMIN_PASSWORD"]) < 16:
         raise RuntimeError("DORADO_ADMIN_PASSWORD must be 16+ chars")
-    max_devices()  # Fail fast on invalid subscription/device configuration.
+    # Expired billing file freezes new pairing, not existing agent reconnect.
+    if not configured_entitlement_file():
+        max_devices()
     if os.environ.get("DORADO_COMMERCIAL_MODE") == "1" and os.environ.get("DORADO_AGENT_TOKEN"):
         raise RuntimeError("Legacy shared DORADO_AGENT_TOKEN must be disabled in commercial mode")
     if os.environ.get("DORADO_AGENT_TOKEN") and len(os.environ["DORADO_AGENT_TOKEN"]) < 32:
@@ -255,8 +262,13 @@ async def pairing_start(request: Request):
     origin = request.client.host if request.client else "unknown"
     with database() as conn:
         conn.execute("DELETE FROM pairing_requests WHERE expires < ?", (now,))
-        limit = max_devices()
-        if limit and not conn.execute("SELECT 1 FROM paired_devices WHERE name=?", (name,)).fetchone():
+        try:
+            limit = max_devices()
+        except RuntimeError:
+            return oauth_error("billing_entitlement_unavailable", 503)
+        if (configured_entitlement_file() or limit) and not conn.execute(
+            "SELECT 1 FROM paired_devices WHERE name=?", (name,)
+        ).fetchone():
             if conn.execute("SELECT count(*) FROM paired_devices").fetchone()[0] >= limit:
                 return JSONResponse({"error": "device_limit_reached", "device_limit": limit},
                                     status_code=403, headers=pairing_headers())
@@ -354,8 +366,13 @@ async def pairing_token(request: Request):
         if row["status"] != "approved":
             return oauth_error("access_denied", 400)
         # Re-check under BEGIN IMMEDIATE: concurrent pairings cannot bypass seat limits.
-        limit = max_devices()
-        if limit and not conn.execute("SELECT 1 FROM paired_devices WHERE name=?", (row["device_name"],)).fetchone():
+        try:
+            limit = max_devices()
+        except RuntimeError:
+            return oauth_error("billing_entitlement_unavailable", 503)
+        if (configured_entitlement_file() or limit) and not conn.execute(
+            "SELECT 1 FROM paired_devices WHERE name=?", (row["device_name"],)
+        ).fetchone():
             if conn.execute("SELECT count(*) FROM paired_devices").fetchone()[0] >= limit:
                 return JSONResponse({"error": "device_limit_reached", "device_limit": limit},
                                     status_code=403, headers=pairing_headers())
@@ -382,10 +399,15 @@ async def admin_devices(request: Request):
         return oauth_error("access_denied", 403)
     with database() as conn:
         rows = conn.execute("SELECT name, created FROM paired_devices ORDER BY name").fetchall()
+    try:
+        seats, billing_available = max_devices(), True
+    except RuntimeError:
+        seats, billing_available = None, False
     return JSONResponse({"devices": [
         {"name": row["name"], "created": row["created"], "online": row["name"] in hub.devices}
         for row in rows
-    ], "count": len(rows), "max_devices": max_devices()}, headers=pairing_headers())
+    ], "count": len(rows), "max_devices": seats,
+       "billing_available": billing_available}, headers=pairing_headers())
 
 
 @app.post("/admin/devices/revoke")

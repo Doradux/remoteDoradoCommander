@@ -14,6 +14,12 @@ import re
 import secrets
 import shutil
 import tempfile
+import sys
+
+# Permit direct python scripts/provision_pilot.py from a checkout, without an
+# editable pip install. This adds only this trusted repository's root.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 SLUG = re.compile(r"[a-z][a-z0-9-]{1,38}[a-z0-9]\Z")
 FQDN = re.compile(
@@ -40,7 +46,8 @@ def _write_private(path: Path, content: str) -> None:
 
 def provision(
     base_dir: Path, customer_id: str, domain: str, port: int,
-    seats: int = 2, image: str = "dorado-relay:pilot"
+    seats: int = 2, image: str = "dorado-relay:pilot",
+    signed_entitlements: bool = False,
 ) -> Path:
     """Create config atomically. Never print or return secrets."""
     domain = domain.lower().strip()
@@ -100,6 +107,29 @@ def provision(
             "volumes:\n"
             "  data:\n"
         )
+        if signed_entitlements:
+            # Master stays with the operator/control plane; the customer
+            # receives only its own derived key, never the master key.
+            from remote_dorado.entitlements import derive_tenant_key, create_entitlement
+            master = os.environ.get("DORADO_ENTITLEMENT_MASTER_KEY", "")
+            tenant_key = derive_tenant_key(master, customer_id)
+            env += (
+                "DORADO_ENTITLEMENT_FILE=/app/entitlements/current.json\n"
+                f"DORADO_ENTITLEMENT_CUSTOMER={customer_id}\n"
+                f"DORADO_ENTITLEMENT_SECRET={tenant_key.hex()}\n"
+            )
+            compose = compose.replace(
+                "    volumes: ['data:/app/data']\n",
+                "    volumes: ['data:/app/data', './entitlements:/app/entitlements:ro']\n",
+            )
+            ent_dir = stage / "entitlements"
+            ent_dir.mkdir(mode=0o755)
+            # Signed manifests are not secrets; the directory mount must be
+            # readable by the non-root relay user. Tenant .env stays 0600.
+            initial = create_entitlement(customer_id, 0, "pending", tenant_key)
+            signed_file = ent_dir / "current.json"
+            signed_file.write_text(json.dumps(initial, indent=2) + "\n", encoding="utf-8")
+            signed_file.chmod(0o644)
         caddy = (
             f"{domain} {{\n"
             "  encode zstd gzip\n"
@@ -115,6 +145,7 @@ def provision(
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "kind": "isolated_single_customer_relay",
             "deployed": False,
+            "signed_entitlements": signed_entitlements,
         }
         _write_private(stage / ".env", env)
         _write_private(stage / "compose.yaml", compose)
@@ -136,8 +167,13 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--seats", type=int, default=2)
     parser.add_argument("--image", default="dorado-relay:pilot")
+    parser.add_argument("--signed-entitlements", action="store_true",
+                        help="Use a per-customer HMAC key and operator-updated signed seat file")
     args = parser.parse_args()
-    folder = provision(args.base_dir, args.customer_id, args.domain, args.port, args.seats, args.image)
+    folder = provision(
+        args.base_dir, args.customer_id, args.domain, args.port, args.seats, args.image,
+        signed_entitlements=args.signed_entitlements,
+    )
     print(f"Provisioned draft configuration in {folder}; nothing has been deployed.")
     print("Customer password is ONLY in the .env file (mode 0600); never share it in chat.")
 
