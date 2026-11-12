@@ -2,6 +2,8 @@
 
 Estado: **funcional en pruebas, no apto todavía para venta ni alojamiento multiusuario compartido**.
 
+**Frontend:** sustituido por React + Animate UI v2.4 + Motion + Tailwind (ver [catálogo completo](ANIMATE_UI_CATALOG.md)). Se han eliminado los formularios HTML y el CSS artesanales que se generaban en Python. La página FastAPI solamente entrega datos JSON escapados y archivos estáticos de origen local, con Content Security Policy restrictiva. Construir con `npm ci --prefix frontend && npm run build --prefix frontend`; los artefactos de producción se guardan en `remote_dorado/static` y se distribuyen con el paquete Python. El JavaScript frontend es obligatorio para visualizar las pantallas web.
+
 ## Qué permite
 
 Cada *relay aislado* admite un propietario, con su correo y contraseña independientes de la clave de administración del servidor:
