@@ -1,0 +1,27 @@
+# FREE home-hosted relay. Use together with the existing compose.yaml:
+# docker compose -f compose.yaml -f compose.home.yaml up -d --build
+#
+# The relay keeps its HTTP port bound to 127.0.0.1 on the host. Only
+# Caddy publishes HTTP/HTTPS ports to the LAN/router.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - mcp
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.home:/etc/caddy/Caddyfile:ro
+      - caddy_home_data:/data
+      - caddy_home_config:/config
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+volumes:
+  caddy_home_data:
+  caddy_home_config:

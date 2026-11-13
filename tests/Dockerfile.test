@@ -2,6 +2,7 @@ FROM python:3.12-slim
 WORKDIR /src
 COPY pyproject.toml ./
 COPY README.md ./README.md
+COPY compose.yaml compose.home.yaml Dockerfile .env.example ./
 COPY remote_dorado/ ./remote_dorado/
 COPY scripts/ ./scripts/
 COPY frontend/package.json ./frontend/package.json
@@ -9,6 +10,7 @@ COPY frontend/src/ ./frontend/src/
 COPY frontend/public/ ./frontend/public/
 COPY docs/ANIMATE_UI_CATALOG.md ./docs/ANIMATE_UI_CATALOG.md
 COPY docs/RELEASE_CANDIDATE_REVIEW.md ./docs/RELEASE_CANDIDATE_REVIEW.md
+COPY docs/HOME_SELF_HOSTED.md ./docs/HOME_SELF_HOSTED.md
 COPY .github/workflows/release.yml ./.github/workflows/release.yml
 COPY .github/workflows/rc-build.yml ./.github/workflows/rc-build.yml
 COPY .github/workflows/security-audit.yml ./.github/workflows/security-audit.yml
