@@ -33,7 +33,7 @@ El enlace al catálogo debe revisarse al incorporar cada componente nuevo; Anima
 
 ## Instalación gratuita y seguridad del agente
 
-- La versión pública debe instalarse y utilizarse sin contratar Cloud ni comprar la skill. Mantener `docs/FREE_SELF_HOSTED_START.md` y `scripts/setup_selfhost.py` funcionales sin servidores de Dorado.
+- La versión pública debe instalarse y utilizarse sin contratar Cloud ni alquilar un VPS. Mantener `docs/HOME_SELF_HOSTED.md`, `docs/FREE_SELF_HOSTED_START.md`, `compose.home.yaml` y `scripts/setup_selfhost.py --home` funcionales: relay + Caddy en el propio PC, reenvío TCP 80/443 solo al anfitrión, DNS/HTTPS válido y advertencia CG-NAT. La skill de pago de Agensi **no puede exigir hosting de pago**.
 - No pedir que se peguen contraseñas o tokens del relay en el chat, ni convertir un servicio de pago en requisito de una skill.
 - Los perfiles `inspect`, `files` y `full` se aplican en el agente local, nunca por parámetros MCP. Las instalaciones nuevas proponen `inspect`; las antiguas conservan sus permisos salvo cambio expreso.
 - `DORADO_ALLOWED_ROOTS` no es un sandbox de comandos shell.

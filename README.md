@@ -1,6 +1,6 @@
 # Dorado Relay (formerly Remote Dorado Commander)
 
-**Comenzar gratis:** [Guía de autoalojamiento (español)](docs/FREE_SELF_HOSTED_START.md). No requiere Cloud ni comprar la skill.
+**Comenzar gratis sin pagar servidor:** [Instalar en tu propio PC o equipo de casa, con port forwarding](docs/HOME_SELF_HOSTED.md) · [Guía general de autoalojamiento](docs/FREE_SELF_HOSTED_START.md). Comprar una skill de Agensi **no obliga a contratar Dorado Cloud ni un VPS**. El PC anfitrión debe permanecer encendido y la red debe permitir conexiones entrantes (atención a CG-NAT).
 
 **Versión de revisión 0.5.0rc1:** [Resultados, limitaciones y cómo montarla tras el visto bueno](docs/RELEASE_CANDIDATE_REVIEW.md). Permanece en la rama comercial, sin Release público ni cobros. Las funcionalidades Cloud y la aprobación de Agensi siguen pendientes.
 
@@ -92,6 +92,8 @@ pipx install /tmp/dorado-wheel/*.whl
 Private GitHub Releases provide executable installation without downloading the source repository or requiring Python on the target PC. GitHub Actions build minutes may be billed depending on your plan.
 
 ### Deploying the relay (Linux + Docker)
+
+**Free at home on your own PC:** [Home self-hosted guide](docs/HOME_SELF_HOSTED.md). The single-PC setup generates private credentials and a Caddy HTTPS proxy: `python3 scripts/setup_selfhost.py --home --domain my-relay.duckdns.org` followed by `docker compose -f compose.yaml -f compose.home.yaml up -d --build`. Forward TCP **80 and 443** from your router to the PC hosting Caddy, **never 8765**. Your home ISP must allow inbound connections; standard CG-NAT prevents direct IPv4 port forwarding. The local PC also needs the device agent to control itself. Cloud hosting is optional, never mandatory for the Agensi skill.
 
 **Free guided setup:** after cloning, run `python3 scripts/setup_selfhost.py --domain mcp.yourdomain.com` to generate a private `.env` with a random admin password and an example `Caddyfile.dorado`. Nothing is started or overwritten. [Full guide](docs/FREE_SELF_HOSTED_START.md).
 
@@ -217,7 +219,9 @@ This is an **independent implementation licensed under MIT**. The repository `de
 
 ## Español
 
-**Instalación gratuita más sencilla:** ejecuta `python3 scripts/setup_selfhost.py --domain mcp.tudominio.com` tras clonar el repositorio. Genera `.env` privado y configuración Caddy sin iniciar nada. Los equipos nuevos recomiendan el permiso `inspect`, y puedes ampliar a `files` o `full` desde el asistente local. [Instrucciones completas](docs/FREE_SELF_HOSTED_START.md).
+**Instalación gratuita en tu propio ordenador:** [Guía paso a paso con DNS gratuito y reenvío de puertos](docs/HOME_SELF_HOSTED.md). Ejecuta `python3 scripts/setup_selfhost.py --home --domain mi-relay.duckdns.org` tras clonar el repositorio. Esto prepara el relay y Caddy para que ambos se ejecuten en casa con Docker Compose, sin VPS ni cuotas del proveedor. Para entrar desde Internet tienes que abrir TCP 80/443 hacia el PC y comprobar que no estás bajo CG-NAT.
+
+**Instalación con proxy externo:** ejecuta `python3 scripts/setup_selfhost.py --domain mcp.tudominio.com` tras clonar el repositorio. Genera `.env` privado y configuración Caddy sin iniciar nada. Los equipos nuevos recomiendan el permiso `inspect`, y puedes ampliar a `files` o `full` desde el asistente local. [Instrucciones completas](docs/FREE_SELF_HOSTED_START.md).
 
 Un MCP remoto **autoalojado**, creado de forma independiente, para usar tus propios equipos desde clientes MCP remotos (incluido ChatGPT, cuando tu cuenta tenga habilitadas las acciones necesarias). **Sin cuotas de llamadas ni suscripción del proveedor original**: tú alojas el relay y el agente. Siguen existiendo los límites de tu infraestructura y de cada cliente/plataforma de IA.
 

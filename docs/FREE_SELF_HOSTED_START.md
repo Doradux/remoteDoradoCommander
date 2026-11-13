@@ -1,5 +1,7 @@
 # Dorado Relay — versión gratuita y autoalojada
 
+**¿No quieres pagar un servidor?** [**Guía para montarlo en tu propio PC, con Caddy, DDNS y port forwarding**](HOME_SELF_HOSTED.md). Esta es la opción recomendada para los compradores de Agensi que tengan IPv4 pública y puedan abrir puertos. Usa `python3 scripts/setup_selfhost.py --home --domain mi-relay.duckdns.org` y después Docker Compose; el proxy HTTPS queda incluido. Con CG-NAT no funciona el port forwarding IPv4 directo. El PC anfitrión debe permanecer encendido.
+
 **Funciona independientemente de Agensi y de Dorado Relay Cloud.** No requiere una suscripción, una cuenta del proveedor, una compra adicional ni pagar por dispositivo. El servidor MCP, los agentes y la documentación pública están en el repositorio. El alojamiento propio y el cliente de IA pueden tener sus propios costes y requisitos.
 
 **Nota de desarrollo (noviembre de 2026):** los cambios todavía están en la rama `feature/commercial-hardening`. El comando siguiente apunta a esa rama. Cuando esté validada y fusionada, la instalación pública utilizará `main`. No se han anunciado Releases de esta versión.

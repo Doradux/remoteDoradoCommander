@@ -10,7 +10,7 @@
 | Componente | Estado |
 | --- | --- |
 | Relay MCP con OAuth PKCE, dispositivos múltiples y WebSocket | Funcional y probado localmente |
-| Instalación gratuita guiada del relay (sin sobrescribir secretos) | Funcional y probado con Docker Compose |
+| Instalación gratuita guiada del relay (sin sobrescribir secretos) | Funcional; incluye modo doméstico `--home` con Caddy/HTTPS en Docker Compose |
 | Instaladores Linux/macOS/Windows por GitHub Releases | Automatización preparada; faltan pruebas externas de Release en esos sistemas |
 | Perfil local `inspect` / `files` / `full` | Funcional; nuevas vinculaciones recomiendan `inspect`; instalaciones antiguas conservan perfil anterior |
 | Cola bounded de tareas en agentes (8 trabajadores, 24 pendientes) | Funcional; exceso de carga rechazada |
@@ -54,9 +54,23 @@ Los tests no garantizan ausencia de fallos o vulnerabilidades. Verificar CI de G
 
 ## 4. Montaje de prueba autoalojada (después del visto bueno)
 
-**Requisitos elegidos por el propietario:** dominio/subdominio propio, servidor Linux controlado, DNS apuntando al servidor, puertos 80/443 en el firewall para Caddy, Docker y Docker Compose. Nunca usar la máquina doméstica para clientes externos.
+**Opción gratuita prioritaria para compradores de la skill:** el usuario ejecuta el relay y el agente en su **propio PC de casa** o en un mini-PC doméstico, sin VPS ni plan Cloud. El equipo debe permanecer encendido, contar con DNS/HTTPS válido y tener acceso entrante a TCP 80/443. **CG-NAT o doble NAT sin configurar impiden el port forwarding IPv4 directo.** Guía detallada: [HOME_SELF_HOSTED.md](HOME_SELF_HOSTED.md). Nunca mezclar clientes ajenos en el relay doméstico del desarrollador; cada comprador gestiona el suyo.
 
-Primero, **tras autorizar la fusión y publicar la versión**:
+**Alternativa:** servidor Linux propio o VPS opcional, DNS apuntando al servidor, puertos 80/443 y Docker Compose. Esta ruta no es requisito de la skill.
+
+Para montar el relay en un PC doméstico sin pagar VPS, sigue [la instalación en casa](HOME_SELF_HOSTED.md). Después de clonar la rama de prueba y confirmar que puedes abrir puertos en el router, ejecuta:
+
+```bash
+python3 scripts/setup_selfhost.py --home --domain mi-relay.duckdns.org
+mkdir -p data
+sudo chown 10001:10001 data
+sudo chmod 700 data
+docker compose -f compose.yaml -f compose.home.yaml up -d --build
+```
+
+El comando es para Linux. En Windows se puede preparar `--home` con Python y probar Docker Desktop/WSL2, pero aún falta verificar una instalación limpia con usuario real. **Solo se reenvían TCP 80 y 443 al PC anfitrión. No publiques 8765.** En el mismo PC instala además el agente para poder controlarlo.
+
+Para un VPS opcional o un Linux que ya tenga un proxy HTTPS externo, **tras autorizar la fusión y publicar la versión**:
 
 ```bash
 git clone https://github.com/Doradux/remoteDoradoCommander.git
@@ -89,7 +103,7 @@ En el cliente MCP configura `https://mcp.TU-DOMINIO.com/mcp`, completa OAuth y p
 - [ ] Lanzamiento inicial de **relay gratuito + skill Agensi** antes de Cloud, o preferencia por esperar a tener Cloud.
 - [ ] Precio de la skill (**19 USD, pago único**, aún propuesto).
 - [ ] Texto de la ficha/ZIP y capturas de pantalla.
-- [ ] Proveedor/servidor para un piloto real, coste, DNS, políticas de backups y soporte.
+- [ ] Elegir para el piloto entre PC doméstico con port forwarding y un servidor opcional; comprobar CG-NAT/HTTPS, copias de seguridad y soporte. **No es obligatorio alquilar servidor.**
 - [ ] Autorización explícita para fusionar a `main` (el flujo de Releases puede **publicar automáticamente**).
 - [ ] Evaluación legal y auditoría externa requeridas antes de un lanzamiento público no supervisado.
 
