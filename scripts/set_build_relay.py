@@ -17,7 +17,15 @@ def write_default_relay() -> str:
                 parts.fragment or parts.username or parts.password):
             raise ValueError("DORADO_DEFAULT_RELAY_URL must be an HTTPS origin (no path or credentials)")
     target = Path(__file__).resolve().parents[1] / "remote_dorado" / "build_config.py"
-    target.write_text('"""Release build configuration: public relay URL, no secrets."""\nDEFAULT_RELAY_URL = ' + json.dumps(url) + '\n')
+    cloud = os.environ.get("DORADO_BUILD_CLOUD_URL", "").strip().rstrip("/")
+    if cloud:
+        parts = urlsplit(cloud)
+        if (parts.scheme != "https" or not parts.netloc or parts.path or parts.query
+                or parts.fragment or parts.username or parts.password):
+            raise ValueError("DORADO_BUILD_CLOUD_URL must be a public HTTPS origin")
+    target.write_text('"""Release build configuration: public origins only; no secrets."""\n'
+                      'DEFAULT_RELAY_URL = ' + json.dumps(url) + '\n'
+                      'DEFAULT_CLOUD_API_URL = ' + json.dumps(cloud) + '\n')
     print("Compiled public relay origin:", url if url else "(not configured: first run will ask once)")
     return url
 

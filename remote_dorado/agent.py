@@ -166,19 +166,61 @@ def websocket_address(base_url: str) -> str:
     return urlunsplit(("wss" if parts.scheme == "https" else "ws", parts.netloc, "/agent/ws", "", ""))
 
 
-async def run_agent(url: str, token: str, name: str) -> None:
+async def run_agent(url: str, token: str, name: str, *,
+                    stop_event: Any = None,
+                    on_status: Any = None) -> None:
+    """Connect forever unless a GUI stop event is set.
+
+    Emits status on the caller's worker thread. The GUI must relay via Qt
+    signals rather than updating widgets from this thread.
+    """
     if not DEVICE_NAME_PATTERN.fullmatch(name):
         raise ValueError("Device name must be 1-64 letters, digits, underscores or hyphens")
+    validate_relay_url(url)
+    if not isinstance(token, str) or len(token) < 32:
+        raise ValueError("Missing device credential")
+    def stopping() -> bool:
+        return bool(stop_event is not None and stop_event.is_set())
+
+    async def pause(seconds: float) -> None:
+        elapsed = 0.0
+        while elapsed < seconds and not stopping():
+            tick = min(.25, seconds - elapsed)
+            await asyncio.sleep(tick)
+            elapsed += tick
+
     delay = 1
-    while True:
+    while not stopping():
         try:
-            async with websockets.connect(websocket_address(url), additional_headers={"Authorization": f"Bearer {token}", "X-Device-Name": name}, max_size=3_000_000, ping_interval=20, ping_timeout=20) as ws:
+            if on_status is not None:
+                on_status("connecting")
+            async with websockets.connect(
+                websocket_address(url),
+                additional_headers={"Authorization": f"Bearer {token}", "X-Device-Name": name},
+                max_size=3_000_000, ping_interval=20, ping_timeout=20,
+                open_timeout=10,
+            ) as ws:
                 print(f"Device {name} connected", flush=True)
+                if on_status is not None:
+                    on_status("connected")
                 delay = 1
-                await serve_agent_requests(ws, dispatch)
+                async def close_when_stopped():
+                    while not stopping():
+                        await asyncio.sleep(.25)
+                    await ws.close(code=1000, reason="Desktop app stopped")
+                watcher = asyncio.create_task(close_when_stopped()) if stop_event is not None else None
+                try:
+                    await serve_agent_requests(ws, dispatch)
+                finally:
+                    if watcher is not None:
+                        watcher.cancel()
+                        await asyncio.gather(watcher, return_exceptions=True)
         except (OSError, websockets.exceptions.WebSocketException) as exc:
             print(f"Disconnected ({exc}); retrying in {delay}s", file=sys.stderr, flush=True)
-        await asyncio.sleep(delay)
+        finally:
+            if on_status is not None:
+                on_status("disconnected")
+        await pause(delay)
         delay = min(delay * 2, 30)
 
 
@@ -254,7 +296,8 @@ def validate_relay_url(url: str) -> None:
         raise ValueError("Enter only the relay origin, for example https://mcp.example.com")
 
 
-def pair_with_relay(url: str, name: str, *, open_browser: bool = True) -> str:
+def pair_with_relay(url: str, name: str, *, open_browser: bool = True,
+                    on_pairing: Any = None, stop_event: Any = None) -> str:
     """Request user-confirmed device authorization. Never print or ask for agent tokens."""
     validate_relay_url(url)
     with httpx.Client(timeout=10, follow_redirects=False) as client:
@@ -271,13 +314,18 @@ def pair_with_relay(url: str, name: str, *, open_browser: bool = True) -> str:
         print(f"  Pairing code: {request['user_code']}")
         print("Approve the computer in your browser with your relay administrator password.")
         print("This pairs the device to your MCP relay, not to your ChatGPT login directly.")
+        if on_pairing is not None:
+            on_pairing(verify, request["user_code"])
         if open_browser and os.environ.get("DORADO_NO_BROWSER") != "1":
             if not webbrowser.open(verify):
                 print("Open the link above in a browser to continue.")
         interval = max(3, min(int(request.get("interval", 3)), 30))
         expires_at = time.monotonic() + max(1, min(int(request["expires_in"]), 900))
         while time.monotonic() < expires_at:
-            time.sleep(interval)
+            if stop_event is not None and stop_event.wait(interval):
+                raise RuntimeError("Pairing canceled by user")
+            if stop_event is None:
+                time.sleep(interval)
             reply = client.post(url + "/pair/token", json={"device_code": code})
             if reply.status_code == 200:
                 issued = reply.json()
