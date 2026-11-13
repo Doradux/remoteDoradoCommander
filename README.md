@@ -1,5 +1,7 @@
 # Dorado Relay (formerly Remote Dorado Commander)
 
+**Programa gráfico para Windows y Ubuntu:** [Dorado Relay Desktop — dos modos, Cloud y servidor propio, con reconexión automática](docs/DESKTOP_APP.md). Una sola aplicación recuerda la última conexión y guarda los tokens en el llavero del sistema. Cloud permanece deshabilitado hasta que el servicio oficial esté configurado.
+
 **Comenzar gratis sin pagar servidor:** [Instalar en tu propio PC o equipo de casa, con port forwarding](docs/HOME_SELF_HOSTED.md) · [Guía general de autoalojamiento](docs/FREE_SELF_HOSTED_START.md). Comprar una skill de Agensi **no obliga a contratar Dorado Cloud ni un VPS**. El PC anfitrión debe permanecer encendido y la red debe permitir conexiones entrantes (atención a CG-NAT).
 
 **Versión de revisión 0.5.0rc1:** [Resultados, limitaciones y cómo montarla tras el visto bueno](docs/RELEASE_CANDIDATE_REVIEW.md). Permanece en la rama comercial, sin Release público ni cobros. Las funcionalidades Cloud y la aprobación de Agensi siguen pendientes.

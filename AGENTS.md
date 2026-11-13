@@ -38,3 +38,7 @@ El enlace al catálogo debe revisarse al incorporar cada componente nuevo; Anima
 - Los perfiles `inspect`, `files` y `full` se aplican en el agente local, nunca por parámetros MCP. Las instalaciones nuevas proponen `inspect`; las antiguas conservan sus permisos salvo cambio expreso.
 - `DORADO_ALLOWED_ROOTS` no es un sandbox de comandos shell.
 - Los releases del servidor y el wheel deben compilar e incluir el frontend Animate UI y `remote_dorado/static/.vite/manifest.json`.
+- **Escritorio nativo:** Windows y Ubuntu usan Qt / PySide6-Essentials (no una web, por lo tanto no se aplica la regla de componentes Animate UI a ventanas nativas). Consulta `docs/DESKTOP_APP.md`.
+- No guardar contraseñas ni tokens en `desktop.json`. Recordar el último modo, servidor y cuenta; persistir credenciales solo en Windows Credential Manager o Secret Service de Ubuntu.
+- El servidor Cloud debe verificar cuenta y suscripción de pago activa, tanto al conectar como al revalidar. El cliente jamás decide por sí solo que una suscripción está activa; no esconder fallos tras una falsa conexión.
+- Los ejecutables GUI se empaquetan `--onedir`, conservando librerías Qt dinámicas y avisos LGPL. No publicar builds de prueba como GitHub Releases sin autorización.
