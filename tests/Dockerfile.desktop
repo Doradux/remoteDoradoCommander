@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+ENV DEBIAN_FRONTEND=noninteractive QT_QPA_PLATFORM=offscreen
+RUN apt-get update -qq && apt-get install -yqq --no-install-recommends \
+      libgssapi-krb5-2 libkrb5-3 libfreetype6 libfontconfig1 libglib2.0-0 libegl1 libopengl0 libgl1 libxkbcommon0 libdbus-1-3 \
+      libxcb-cursor0 libx11-xcb1 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+      libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 \
+      libxrender1 binutils >/dev/null && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY pyproject.toml ./
+COPY remote_dorado/ ./remote_dorado/
+COPY scripts/ ./scripts/
+COPY tests/test_desktop_gui.py tests/test_desktop_cloud_client.py tests/test_desktop_state.py ./tests/
+RUN python -m pip install --no-cache-dir --upgrade pip==26.3 && \
+    python -m pip install --no-cache-dir '.[desktop-test]' 'pyinstaller>=6.10,<7'
+CMD ["python", "-m", "pytest", "-q", "tests/test_desktop_gui.py", "tests/test_desktop_cloud_client.py", "tests/test_desktop_state.py"]

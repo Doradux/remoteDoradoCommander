@@ -11,10 +11,13 @@ dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "websockets>=13,<17", "
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "PyYAML>=6,<7"]
+desktop = ["PySide6-Essentials>=6.9,<7", "keyring>=25,<27", "secretstorage>=3.3,<4; sys_platform == 'linux'"]
+desktop-test = ["PySide6-Essentials>=6.9,<7", "keyring>=25,<27", "secretstorage>=3.3,<4; sys_platform == 'linux'", "pytest>=8,<10"]
 
 [project.scripts]
 remote-dorado-server = "remote_dorado.server:main"
 remote-dorado-agent = "remote_dorado.agent:main"
+dorado-relay-desktop = "remote_dorado.desktop_gui:main"
 remote-dorado-control-plane = "remote_dorado.control_plane:main"
 
 [tool.setuptools.packages.find]
