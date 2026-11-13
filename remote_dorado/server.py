@@ -30,6 +30,7 @@ import uvicorn
 from .ui import pairing_page, authorization_page, ui_response, HEADERS as UI_HEADERS, STATIC_DIR
 from .http_inputs import bounded_json, bounded_form
 from .entitlements import configured_entitlement_file, effective_relay_seats, EntitlementError
+from .cloud_link import verify_cloud_request
 from .portal import (
     init_portal_db, router as portal_router, owner_exists,
     owner_session, csrf_ok, commercial_portal_enabled, login_redirect,
@@ -167,6 +168,9 @@ def init_db() -> None:
             created INTEGER NOT NULL, origin TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0
           );
+          CREATE TABLE IF NOT EXISTS cloud_provision_nonces (
+            nonce TEXT PRIMARY KEY, expires INTEGER NOT NULL
+          );
           CREATE TABLE IF NOT EXISTS oauth_registration_events (
             origin TEXT NOT NULL, created INTEGER NOT NULL
           );
@@ -206,6 +210,8 @@ class DeviceHub:
         self.capacity = asyncio.Semaphore(16)
 
     async def ask(self, name: str, op: str, args: dict[str, Any]) -> dict[str, Any]:
+        if cloud_managed() and not cloud_subscription_active():
+            raise RuntimeError("Cloud subscription inactive or not verified")
         device = self.devices.get(name)
         if not device:
             raise RuntimeError(f"Device '{name}' is offline")
@@ -280,6 +286,104 @@ async def read_limited_json(request: Request, maximum: int) -> Any:
 
 def pairing_headers() -> dict[str, str]:
     return {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
+
+
+def cloud_managed() -> bool:
+    return os.environ.get("DORADO_CLOUD_MANAGED") == "1"
+
+
+def cloud_subscription_active() -> bool:
+    """Only a fresh, signed ACTIVE entitlement grants managed access."""
+    if not (cloud_managed() and configured_entitlement_file()
+            and os.environ.get("DORADO_COMMERCIAL_MODE") == "1"):
+        return False
+    try:
+        if max_devices() <= 0:
+            return False
+        location = Path(os.environ["DORADO_ENTITLEMENT_FILE"])
+        packet = json.loads(location.read_text(encoding="utf-8"))
+        return packet["payload"]["status"] == "active"
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        return False
+
+
+@app.post("/internal/cloud/device")
+async def cloud_issue_device(request: Request):
+    """Provider-signed request only; no user passwords, no bypass for unpaid plans."""
+    if not cloud_managed():
+        return JSONResponse({"error": "not_available"}, status_code=404)
+    if not cloud_subscription_active():
+        return JSONResponse({"error": "inactive_subscription"}, status_code=403)
+    packet = await bounded_json(request, 8_192)
+    try:
+        key = bytes.fromhex(os.environ.get("DORADO_ENTITLEMENT_SECRET", ""))
+        name, _email = verify_cloud_request(
+            key, packet, request.headers.get("x-dorado-cloud-signature", ""),
+            os.environ.get("DORADO_ENTITLEMENT_CUSTOMER", ""),
+        )
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "unauthorized_provider"}, status_code=403)
+    now = int(time.time())
+    with database() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM cloud_provision_nonces WHERE expires<?", (now,))
+        try:
+            conn.execute(
+                "INSERT INTO cloud_provision_nonces VALUES (?,?)",
+                (packet["nonce"], now + 120),
+            )
+        except sqlite3.IntegrityError:
+            return JSONResponse({"error": "duplicate_request"}, status_code=409)
+        if not conn.execute(
+            "SELECT 1 FROM paired_devices WHERE name=?", (name,),
+        ).fetchone():
+            used = conn.execute("SELECT count(*) FROM paired_devices").fetchone()[0]
+            if used >= max_devices():
+                return JSONResponse({"error": "device_limit_reached"}, status_code=403)
+        token = secrets.token_urlsafe(48)
+        conn.execute(
+            "INSERT INTO paired_devices(name,token_hash,created) VALUES (?,?,?) "
+            "ON CONFLICT(name) DO UPDATE SET token_hash=excluded.token_hash,created=excluded.created",
+            (name, digest(token), now),
+        )
+    previous = hub.devices.get(name)
+    if previous is not None:
+        try:
+            await previous.socket.close(code=4401)
+        except RuntimeError:
+            pass
+    return JSONResponse(
+        {"device_name": name, "agent_token": token},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/internal/cloud/revoke")
+async def cloud_revoke_device(request: Request):
+    """Only the verified provider can revoke; works even if payment has stopped."""
+    if not cloud_managed() or not configured_entitlement_file():
+        return JSONResponse({"error": "not_available"}, status_code=404)
+    packet = await bounded_json(request, 8_192)
+    try:
+        key = bytes.fromhex(os.environ.get("DORADO_ENTITLEMENT_SECRET", ""))
+        name, _email = verify_cloud_request(
+            key, packet, request.headers.get("x-dorado-cloud-signature", ""),
+            os.environ.get("DORADO_ENTITLEMENT_CUSTOMER", ""),
+        )
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "unauthorized_provider"}, status_code=403)
+    with database() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM cloud_provision_nonces WHERE expires<?", (int(time.time()),))
+        try:
+            conn.execute(
+                "INSERT INTO cloud_provision_nonces VALUES (?,?)",
+                (packet["nonce"], int(time.time()) + 120),
+            )
+        except sqlite3.IntegrityError:
+            return JSONResponse({"error": "duplicate_request"}, status_code=409)
+    revoked = await revoke_paired_device(name)
+    return JSONResponse({"revoked": bool(revoked)}, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/pair/device")
@@ -810,6 +914,9 @@ async def mcp_get(req: Request):
 
 @app.websocket("/agent/ws")
 async def agent_socket(ws: WebSocket):
+    if cloud_managed() and not cloud_subscription_active():
+        await ws.close(code=4403)
+        return
     bearer = ws.headers.get("authorization", "")
     name = ws.headers.get("x-device-name", "")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):

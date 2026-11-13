@@ -7,6 +7,7 @@ a human-controlled rollout. Do not put secret keys in CLI arguments.
 from __future__ import annotations
 
 import argparse
+from getpass import getpass
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,9 @@ def main() -> None:
     register.add_argument("--domain", required=True)
     register.add_argument("--stripe-customer-id", required=True)
     register.add_argument("--stripe-subscription-id", required=True)
+    account = command.add_parser("set-account", help="Set private Cloud login password for a verified customer")
+    account.add_argument("--customer-id", required=True)
+    account.add_argument("--email", required=True)
     command.add_parser("list", help="List customer and reconciliation status (operator only)")
     export = command.add_parser("export-seats", help="Sign seats for ONE isolated relay; never deploy")
     export.add_argument("--customer-id", required=True)
@@ -64,6 +68,14 @@ def main() -> None:
             args.stripe_customer_id, args.stripe_subscription_id,
         )
         print("Customer registered in private control-plane database. No server deployed.")
+    elif args.command == "set-account":
+        from remote_dorado.cloud_desktop_auth import register_cloud_account
+        first = getpass("New Cloud account password (12+ characters): ")
+        second = getpass("Repeat password: ")
+        if first != second:
+            parser.error("Passwords do not match")
+        register_cloud_account(args.customer_id, args.email, first)
+        print("Cloud desktop account updated; old desktop sessions revoked.")
     elif args.command == "list":
         with control.database() as conn:
             rows = conn.execute(

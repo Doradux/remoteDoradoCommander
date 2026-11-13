@@ -141,6 +141,18 @@ def init_db() -> None:
             customer_id TEXT,
             FOREIGN KEY(customer_id) REFERENCES customers(id)
         );
+        CREATE TABLE IF NOT EXISTS desktop_accounts (
+            customer_id TEXT PRIMARY KEY REFERENCES customers(id),
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS desktop_sessions (
+            session_hash TEXT PRIMARY KEY,
+            customer_id TEXT NOT NULL REFERENCES customers(id),
+            email TEXT NOT NULL,
+            device_name TEXT NOT NULL,
+            expires INTEGER NOT NULL
+        );
         """)
 
 
@@ -429,6 +441,8 @@ app = FastAPI(
     title="Dorado Billing Control Plane (private pilot)",
     lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None,
 )
+from .cloud_desktop_auth import router as cloud_desktop_router
+app.include_router(cloud_desktop_router)
 
 
 @app.get("/health")
